@@ -10,12 +10,18 @@ const TOKEN = '7624808452:AAHffFqqhaXtun4XthusBfeeeVDcp6Qsrs4';
 // Firma con emojis
 const SIGNATURE = '✨ EntresHijos ✨';
 
+// Advertencia para no compartir
+const WARNING_MESSAGE = '\n\n⚠️ Este mensaje es exclusivo para este grupo. Por favor, no lo compartas.';
+
 // Configuración del servidor webhook
 const PORT = process.env.PORT || 8443;
 const WEBHOOK_URL = 'https://entreboton.onrender.com/webhook';
 
 // Almacenamiento de registros de clics (en memoria, para este ejemplo)
 const clickRecords = [];
+
+// Almacenamiento de los chat_id originales de los mensajes (para verificar si se reenvían)
+const messageOrigins = new Map(); // Mapa para almacenar message_id -> { chat_id, message_text }
 
 // Crear el bot con opciones para webhook
 const bot = new TelegramBot(TOKEN, { polling: false });
@@ -33,11 +39,11 @@ function sanitizeText(text) {
     .replace(/[<>&'"]/g, (char) => {
       // Escapar caracteres especiales para HTML
       switch (char) {
-        case '<': return '&lt;';
-        case '>': return '&gt;';
-        case '&': return '&amp;';
-        case "'": return '&apos;'; // Corregido: Escapar comillas simples
-        case '"': return '&quot;';
+        case '<': return '<';
+        case '>': return '>';
+        case '&': return '&';
+        case "'": return "'";
+        case '"': return '"';
         default: return char;
       }
     })
@@ -45,13 +51,13 @@ function sanitizeText(text) {
 }
 
 // Función para generar botones inline para múltiples enlaces
-function createButtons(urls, messageId) {
+function createButtons(urls, messageId, originalChatId) {
   const keyboard = [];
   // Añadir un botón para cada enlace con un callback_data único
   urls.forEach((url, index) => {
     keyboard.push([{
       text: `🔗 Enlace ${index + 1}`,
-      callback_data: `click_${messageId}_${index}`,
+      callback_data: `click_${messageId}_${index}_${originalChatId}`, // Añadimos el chat_id original al callback_data
       url: url
     }]);
   });
@@ -110,6 +116,52 @@ function structureMessage(text, urls) {
   return { formattedText: formattedText.trim(), urlPositions };
 }
 
+// Detectar reenvíos de mensajes
+bot.on('message', async (msg) => {
+  // Verificar si el mensaje es un reenvío
+  if (msg.forward_from || msg.forward_from_chat || msg.forward_from_message_id) {
+    const forwardedMessageId = msg.forward_from_message_id;
+    const forwardedFromChatId = msg.forward_from_chat ? msg.forward_from_chat.id : null;
+    const forwardedByUser = msg.from;
+
+    // Verificar si el mensaje reenviado es uno de los mensajes del bot
+    if (messageOrigins.has(forwardedMessageId)) {
+      const origin = messageOrigins.get(forwardedMessageId);
+      const originalChatId = origin.chat_id;
+      const originalMessageText = origin.message_text;
+
+      // Enviar advertencia al grupo original
+      const userName = forwardedByUser.username ? `@${forwardedByUser.username}` : forwardedByUser.first_name;
+      let warningText = `<b>⚠️ Advertencia de reenvío</b>\n\n`;
+      warningText += `El usuario ${userName} (ID: ${forwardedByUser.id}) ha reenviado un mensaje del bot.\n`;
+      warningText += `Mensaje reenviado:\n${originalMessageText.slice(0, 100)}...\n\n`;
+      if (forwardedFromChatId) {
+        warningText += `Reenviado al chat: ${msg.chat.title || msg.chat.id} (ID: ${msg.chat.id})\n`;
+      } else {
+        warningText += `Reenviado a un chat privado (ID: ${msg.chat.id})\n`;
+      }
+      warningText += `Por favor, recuerda que los enlaces son exclusivos para este grupo.`;
+
+      try {
+        await bot.sendMessage(originalChatId, warningText, { parse_mode: 'HTML' });
+        console.log(`Advertencia de reenvío enviada al grupo original (${originalChatId})`);
+      } catch (error) {
+        console.error(`Error al enviar advertencia de reenvío al grupo original: ${error.message}`);
+      }
+
+      // Enviar mensaje al usuario que reenvió (en el chat destino)
+      try {
+        await bot.sendMessage(msg.chat.id, `⚠️ Este mensaje es exclusivo para el grupo original. Por favor, no lo compartas.`, {
+          parse_mode: 'HTML',
+        });
+        console.log(`Advertencia enviada al usuario que reenvió (${forwardedByUser.id}) en el chat destino (${msg.chat.id})`);
+      } catch (error) {
+        console.error(`Error al enviar advertencia al usuario que reenvió: ${error.message}`);
+      }
+    }
+  }
+});
+
 // Comando /boton
 bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
   console.log('Recibido comando /boton:', JSON.stringify(msg, null, 2));
@@ -143,80 +195,102 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
       caption += `Enlace ${index + 1}: Visita este enlace\n(enlace ${index + 1})\n`;
     });
   }
-  caption += `\n${SIGNATURE}`;
+  caption += `\n${SIGNATURE}${WARNING_MESSAGE}`; // Añadir la firma y la advertencia
   console.log('Caption generado:', caption);
 
   try {
-    let sentMessage;
     console.log('Enviando mensaje final...');
     // Caso 1: Solo enlaces (sin multimedia adjunto)
     if (urls.length && !photo && !video && !animation) {
       console.log('Caso 1: Solo enlaces');
-      sentMessage = await bot.sendMessage(chatId, caption, {
+      await bot.editMessageText(caption, {
+        chat_id: chatId,
+        message_id: loadingMsg.message_id,
         parse_mode: 'HTML',
-        reply_markup: createButtons(urls, loadingMsg.message_id),
+        disable_web_page_preview: true, // Desactivar previsualización de enlaces
+        protect_content: true, // Desactivar el reenvío (requiere permisos de administrador)
+        reply_markup: createButtons(urls, loadingMsg.message_id, chatId), // Pasar el chatId original
       });
-      await bot.deleteMessage(chatId, loadingMsg.message_id);
+      // Guardar el origen del mensaje
+      messageOrigins.set(loadingMsg.message_id, { chat_id: chatId, message_text: caption });
     }
     // Caso 2: Solo foto (sin enlaces)
     else if (photo && !urls.length && !video && !animation) {
       console.log('Caso 2: Solo foto');
-      sentMessage = await bot.sendPhoto(chatId, photo, {
+      await bot.deleteMessage(chatId, loadingMsg.message_id);
+      const sentMessage = await bot.sendPhoto(chatId, photo, {
         caption,
         parse_mode: 'HTML',
-        reply_markup: createButtons(urls, loadingMsg.message_id),
+        disable_web_page_preview: true,
+        protect_content: true, // Desactivar el reenvío
+        reply_markup: createButtons(urls, loadingMsg.message_id, chatId),
       });
-      await bot.deleteMessage(chatId, loadingMsg.message_id);
+      messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: caption });
     }
     // Caso 3: Solo video (sin enlaces)
     else if (video && !urls.length && !photo && !animation) {
       console.log('Caso 3: Solo video');
-      sentMessage = await bot.sendVideo(chatId, video, {
+      await bot.deleteMessage(chatId, loadingMsg.message_id);
+      const sentMessage = await bot.sendVideo(chatId, video, {
         caption,
         parse_mode: 'HTML',
-        reply_markup: createButtons(urls, loadingMsg.message_id),
+        disable_web_page_preview: true,
+        protect_content: true, // Desactivar el reenvío
+        reply_markup: createButtons(urls, loadingMsg.message_id, chatId),
       });
-      await bot.deleteMessage(chatId, loadingMsg.message_id);
+      messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: caption });
     }
     // Caso 4: Solo GIF (sin enlaces)
     else if (animation && !urls.length && !photo && !video) {
       console.log('Caso 4: Solo GIF');
-      sentMessage = await bot.sendAnimation(chatId, animation, {
+      await bot.deleteMessage(chatId, loadingMsg.message_id);
+      const sentMessage = await bot.sendAnimation(chatId, animation, {
         caption,
         parse_mode: 'HTML',
-        reply_markup: createButtons(urls, loadingMsg.message_id),
+        disable_web_page_preview: true,
+        protect_content: true, // Desactivar el reenvío
+        reply_markup: createButtons(urls, loadingMsg.message_id, chatId),
       });
-      await bot.deleteMessage(chatId, loadingMsg.message_id);
+      messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: caption });
     }
     // Caso 5: Enlaces + Foto
     else if (urls.length && photo && !video && !animation) {
       console.log('Caso 5: Enlaces + Foto');
-      sentMessage = await bot.sendPhoto(chatId, photo, {
+      await bot.deleteMessage(chatId, loadingMsg.message_id);
+      const sentMessage = await bot.sendPhoto(chatId, photo, {
         caption,
         parse_mode: 'HTML',
-        reply_markup: createButtons(urls, loadingMsg.message_id),
+        disable_web_page_preview: true,
+        protect_content: true, // Desactivar el reenvío
+        reply_markup: createButtons(urls, loadingMsg.message_id, chatId),
       });
-      await bot.deleteMessage(chatId, loadingMsg.message_id);
+      messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: caption });
     }
     // Caso 6: Enlaces + Video
     else if (urls.length && video && !photo && !animation) {
       console.log('Caso 6: Enlaces + Video');
-      sentMessage = await bot.sendVideo(chatId, video, {
+      await bot.deleteMessage(chatId, loadingMsg.message_id);
+      const sentMessage = await bot.sendVideo(chatId, video, {
         caption,
         parse_mode: 'HTML',
-        reply_markup: createButtons(urls, loadingMsg.message_id),
+        disable_web_page_preview: true,
+        protect_content: true, // Desactivar el reenvío
+        reply_markup: createButtons(urls, loadingMsg.message_id, chatId),
       });
-      await bot.deleteMessage(chatId, loadingMsg.message_id);
+      messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: caption });
     }
     // Caso 7: Enlaces + GIF
     else if (urls.length && animation && !photo && !video) {
       console.log('Caso 7: Enlaces + GIF');
-      sentMessage = await bot.sendAnimation(chatId, animation, {
+      await bot.deleteMessage(chatId, loadingMsg.message_id);
+      const sentMessage = await bot.sendAnimation(chatId, animation, {
         caption,
         parse_mode: 'HTML',
-        reply_markup: createButtons(urls, loadingMsg.message_id),
+        disable_web_page_preview: true,
+        protect_content: true, // Desactivar el reenvío
+        reply_markup: createButtons(urls, loadingMsg.message_id, chatId),
       });
-      await bot.deleteMessage(chatId, loadingMsg.message_id);
+      messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: caption });
     }
     // Caso 8: Combinaciones no soportadas
     else {
@@ -228,14 +302,6 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
       });
       return;
     }
-
-    console.log(`Mensaje enviado: ${sentMessage.message_id}`);
-    // Actualizar los botones con el message_id del mensaje enviado
-    await bot.editMessageReplyMarkup(createButtons(urls, sentMessage.message_id), {
-      chat_id: chatId,
-      message_id: sentMessage.message_id,
-    });
-    console.log('Botones actualizados con el nuevo message_id');
 
   } catch (error) {
     console.error(`Error al procesar el comando /boton: ${error.message}`);
@@ -255,8 +321,14 @@ bot.on('callback_query', async (query) => {
   const data = query.data;
 
   if (data.startsWith('click_')) {
-    const [, , linkIndex] = data.split('_');
+    const [, , linkIndex, originalChatId] = data.split('_');
     const timestamp = new Date().toISOString();
+
+    // Verificar si el mensaje está en el chat original
+    if (String(chatId) !== String(originalChatId)) {
+      await bot.answerCallbackQuery(query.id, { text: '⚠️ Los enlaces solo están disponibles en el grupo original.' });
+      return;
+    }
 
     // Registrar el clic
     clickRecords.push({
