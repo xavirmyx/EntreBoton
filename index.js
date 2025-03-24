@@ -21,10 +21,10 @@ const PORT = process.env.PORT || 8443;
 const WEBHOOK_URL = 'https://entreboton.onrender.com/webhook';
 const REDIRECT_BASE_URL = 'https://entreboton.onrender.com/redirect/';
 
-// Configuración de Supabase
+// Configuración de Supabase (usando variables de entorno)
 const SUPABASE_URL = 'https://ycvkdxzxrzuwnkybmjwf.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4cnp1d25reWJtandmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDI4Mjg4NzYsImV4cCI6MjA1ODQwNDg3Nn0.1ts8XIpysbMe5heIg3oWLfqKxReusZxemw4lk2WZ4GI';
-const SUPABASE_SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4cnp1d25reWJtandmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjgyODg3NiwiZXhwIjoyMDU4NDA0ODc2fQ.1oZQbxAEspn8JhgsFRT5r7kG4Sysj3CeFOhmgHo1Ioc';
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4cnp1d25reWJtandmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDI4Mjg4NzYsImV4cCI6MjA1ODQwNDg3Nn0.1ts8XIpysbMe5heIg3oWLfqKxReusZxemw4lk2WZ4GI';
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4cnp1d25reWJtandmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjgyODg3NiwiZXhwIjoyMDU4NDA0ODc2fQ.1oZQbxAEspn8JhgsFRT5r7kG4Sysj3CeFOhmgHo1Ioc';
 
 // Cliente de Supabase con permisos anónimos (para operaciones generales)
 const supabaseAnon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -89,10 +89,10 @@ async function initializeTables() {
   }
 }
 
-// **Sanitizar texto**
+// **Sanitizar texto (corregido)**
 function sanitizeText(text) {
   if (!text) return '';
-  return text.replace(/[<>&'"]/g, char => ({ '<': '<', '>': '>', '&': '&', "'": ''', '"': '"' }[char] || char)).trim();
+  return text.replace(/[<>&'"]/g, char => ({ '<': '<', '>': '>', '&': '&', "'": '\'', '"': '"' }[char] || char)).trim();
 }
 
 // **Extraer URLs**
@@ -189,7 +189,7 @@ bot.on('message', async (msg) => {
   }
 });
 
-// **Detectar y manejar**
+// **Detectar y manejar reenvíos**
 bot.on('message', async (msg) => {
   if (!msg.forward_from && !msg.forward_from_chat && !msg.forward_from_message_id) return;
 
