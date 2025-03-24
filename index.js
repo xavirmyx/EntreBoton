@@ -91,11 +91,26 @@ function createButtons(urls, messageId) {
 }
 
 // Función para extraer todos los enlaces del texto
-function extractUrls(text) {
-  if (!text) return [];
+function extractUrls(msg) {
+  const text = msg.text || msg.caption || '';
+  console.log('Texto para extraer URLs:', text);
+
+  // Método 1: Usar expresión regular
   const urlRegex = /(https?:\/\/[^\s]+)/g;
-  const urls = text.match(urlRegex) || [];
-  console.log(`Enlaces extraídos: ${urls.length}`, urls);
+  let urls = text.match(urlRegex) || [];
+  console.log('URLs extraídas con regex:', urls);
+
+  // Método 2: Usar entidades de Telegram como respaldo
+  const entities = msg.entities || msg.caption_entities || [];
+  const entityUrls = entities
+    .filter(entity => entity.type === 'url')
+    .map(entity => text.substr(entity.offset, entity.length));
+  console.log('URLs extraídas de entidades:', entityUrls);
+
+  // Combinar URLs de ambos métodos y eliminar duplicados
+  urls = [...new Set([...urls, ...entityUrls])];
+  console.log(`Enlaces extraídos (total): ${urls.length}`, urls);
+
   return urls;
 }
 
@@ -103,11 +118,10 @@ function extractUrls(text) {
 bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
   console.log('Recibido comando /boton:', JSON.stringify(msg, null, 2));
   const chatId = msg.chat.id;
-  const text = match ? match[1] : msg.caption || null; // Usar msg.caption si el mensaje tiene una foto
-  const urls = extractUrls(text); // Extraer todos los enlaces
+  const urls = extractUrls(msg); // Extraer todos los enlaces
   const photo = msg.photo ? msg.photo[msg.photo.length - 1].file_id : null;
   const animation = msg.animation ? msg.animation.file_id : null;
-  const captionText = msg.caption || 'Publicación';
+  const captionText = msg.caption || msg.text || 'Publicación';
 
   console.log(`URLs encontradas: ${urls.length}, Foto: ${!!photo}, Animación: ${!!animation}`);
 
