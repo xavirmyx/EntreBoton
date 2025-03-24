@@ -26,10 +26,21 @@ app.use(express.json());
 // Función para sanitizar texto (eliminar caracteres problemáticos)
 function sanitizeText(text) {
   if (!text) return '';
-  // Reemplazar caracteres problemáticos y asegurarse de que el texto sea UTF-8
+  // Reemplazar caracteres problemáticos y asegurarse de que el texto sea seguro para HTML
   return text
     .replace(/[\r\n]+/g, ' ') // Reemplazar saltos de línea por espacios
     .replace(/[^\x20-\x7E]+/g, '') // Eliminar caracteres no ASCII (excepto los básicos)
+    .replace(/[<>&'"]/g, (char) => {
+      // Escapar caracteres especiales para HTML
+      switch (char) {
+        case '<': return '&lt;';
+        case '>': return '&gt;';
+        case '&': return '&amp;';
+        case "'": return '&apos;';
+        case '"': return '&quot;';
+        default: return char;
+      }
+    })
     .trim();
 }
 
@@ -116,16 +127,16 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
     descriptions = ['Contenido multimedia'];
   }
 
-  // Formatear el mensaje
+  // Formatear el mensaje en HTML
   let caption = '📢 ';
   if (urls.length) {
     // Si hay múltiples enlaces, enumerarlos
     titles.forEach((title, index) => {
-      caption += `*Enlace ${index + 1}: ${title}*\n${descriptions[index]}\n`;
+      caption += `<b>Enlace ${index + 1}: ${title}</b>\n${descriptions[index]}\n`;
     });
   } else {
     // Si no hay enlaces, usar el título y descripción por defecto
-    caption += `*${titles[0]}*\n${descriptions[0]}\n`;
+    caption += `<b>${titles[0]}</b>\n${descriptions[0]}\n`;
   }
   caption += `\n${SIGNATURE}`;
 
@@ -137,12 +148,12 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
       if (imageUrl) {
         await bot.sendPhoto(chatId, imageUrl, {
           caption,
-          parse_mode: 'Markdown',
+          parse_mode: 'HTML', // Cambiar a HTML para evitar problemas con Markdown
           reply_markup: replyMarkup,
         });
       } else {
         await bot.sendMessage(chatId, caption, {
-          parse_mode: 'Markdown',
+          parse_mode: 'HTML',
           reply_markup: replyMarkup,
         });
       }
@@ -152,7 +163,7 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
     else if (photo && !urls.length && !animation) {
       await bot.sendPhoto(chatId, photo, {
         caption,
-        parse_mode: 'Markdown',
+        parse_mode: 'HTML',
         reply_markup: replyMarkup,
       });
       await bot.deleteMessage(chatId, loadingMsg.message_id);
@@ -161,7 +172,7 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
     else if (animation && !urls.length && !photo) {
       await bot.sendAnimation(chatId, animation, {
         caption,
-        parse_mode: 'Markdown',
+        parse_mode: 'HTML',
         reply_markup: replyMarkup,
       });
       await bot.deleteMessage(chatId, loadingMsg.message_id);
@@ -170,7 +181,7 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
     else if (urls.length && photo && !animation) {
       await bot.sendPhoto(chatId, photo, {
         caption,
-        parse_mode: 'Markdown',
+        parse_mode: 'HTML',
         reply_markup: replyMarkup,
       });
       await bot.deleteMessage(chatId, loadingMsg.message_id);
@@ -179,7 +190,7 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
     else if (urls.length && animation && !photo) {
       await bot.sendAnimation(chatId, animation, {
         caption,
-        parse_mode: 'Markdown',
+        parse_mode: 'HTML',
         reply_markup: replyMarkup,
       });
       await bot.deleteMessage(chatId, loadingMsg.message_id);
@@ -189,7 +200,7 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
       await bot.editMessageText('⚠️ Combinación no soportada. Usa enlaces, foto o GIF por separado o con enlaces.', {
         chat_id: chatId,
         message_id: loadingMsg.message_id,
-        parse_mode: 'Markdown',
+        parse_mode: 'HTML',
       });
     }
   } catch (error) {
@@ -197,7 +208,7 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
     await bot.editMessageText('⚠️ Ocurrió un error al generar la publicación.', {
       chat_id: chatId,
       message_id: loadingMsg.message_id,
-      parse_mode: 'Markdown',
+      parse_mode: 'HTML',
     });
   }
 });
