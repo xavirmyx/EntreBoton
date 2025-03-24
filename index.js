@@ -1,6 +1,4 @@
 const TelegramBot = require('node-telegram-bot-api');
-const axios = require('axios');
-const cheerio = require('cheerio');
 const express = require('express');
 
 // Configurar logging
@@ -35,45 +33,15 @@ function sanitizeText(text) {
     .replace(/[<>&'"]/g, (char) => {
       // Escapar caracteres especiales para HTML
       switch (char) {
-        case '<': return '&lt;';
-        case '>': return '&gt;';
-        case '&': return '&amp;';
-        case "'": return '&apos;'; // Corregir el escape de comillas simples
-        case '"': return '&quot;';
+        case '<': return '<';
+        case '>': return '>';
+        case '&': return '&';
+        case "'": return '''; // Corregir el escape de comillas simples
+        case '"': return '"';
         default: return char;
       }
     })
     .trim();
-}
-
-// Función para analizar enlaces
-async function analyzeLink(url) {
-  console.log(`Analizando enlace: ${url}`);
-  try {
-    const response = await axios.get(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-      timeout: 5000, // Reducir el timeout a 5 segundos
-      maxRedirects: 5, // Limitar el número de redirecciones
-    });
-    const $ = cheerio.load(response.data);
-
-    // Extraer título
-    let title = $('meta[property="og:title"]').attr('content') || $('title').text() || 'Sin título';
-    title = sanitizeText(title);
-
-    // Extraer descripción
-    let description = $('meta[property="og:description"]').attr('content') || 'Visita este enlace para más info.';
-    description = sanitizeText(description);
-
-    // Extraer imagen (si existe)
-    let imageUrl = $('meta[property="og:image"]').attr('content') || null;
-
-    console.log(`Enlace analizado: ${url} - Título: ${title}`);
-    return { title, description, imageUrl };
-  } catch (error) {
-    console.error(`Error al analizar el enlace ${url}: ${error.message}`);
-    return { title: 'Enlace', description: 'Visita este enlace', imageUrl: null };
-  }
 }
 
 // Función para generar botones inline para múltiples enlaces
