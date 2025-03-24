@@ -35,11 +35,11 @@ function sanitizeText(text) {
     .replace(/[<>&'"]/g, (char) => {
       // Escapar caracteres especiales para HTML
       switch (char) {
-        case '<': return '&lt;';
-        case '>': return '&gt;';
-        case '&': return '&amp;';
-        case "'": return '&apos;';
-        case '"': return '&quot;';
+        case '<': return '<';
+        case '>': return '>';
+        case '&': return '&';
+        case "'": return ''';
+        case '"': return '"';
         default: return char;
       }
     })
@@ -48,10 +48,12 @@ function sanitizeText(text) {
 
 // Función para analizar enlaces
 async function analyzeLink(url) {
+  console.log(`Analizando enlace: ${url}`);
   try {
     const response = await axios.get(url, {
       headers: { 'User-Agent': 'Mozilla/5.0' },
-      timeout: 10000,
+      timeout: 5000, // Reducir el timeout a 5 segundos
+      maxRedirects: 5, // Limitar el número de redirecciones
     });
     const $ = cheerio.load(response.data);
 
@@ -66,6 +68,7 @@ async function analyzeLink(url) {
     // Extraer imagen (si existe)
     let imageUrl = $('meta[property="og:image"]').attr('content') || null;
 
+    console.log(`Enlace analizado: ${url} - Título: ${title}`);
     return { title, description, imageUrl };
   } catch (error) {
     console.error(`Error al analizar el enlace ${url}: ${error.message}`);
@@ -91,27 +94,34 @@ function createButtons(urls, messageId) {
 function extractUrls(text) {
   if (!text) return [];
   const urlRegex = /(https?:\/\/[^\s]+)/g;
-  return text.match(urlRegex) || [];
+  const urls = text.match(urlRegex) || [];
+  console.log(`Enlaces extraídos: ${urls.length}`, urls);
+  return urls;
 }
 
 // Comando /boton
 bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
   console.log('Recibido comando /boton:', JSON.stringify(msg, null, 2));
   const chatId = msg.chat.id;
-  const text = match[1] || null;
+  const text = match[1] || msg.caption || null; // Usar msg.caption si el mensaje tiene una foto
   const urls = extractUrls(text); // Extraer todos los enlaces
   const photo = msg.photo ? msg.photo[msg.photo.length - 1].file_id : null;
   const animation = msg.animation ? msg.animation.file_id : null;
   const captionText = msg.caption || 'Publicación';
 
+  console.log(`URLs encontradas: ${urls.length}, Foto: ${!!photo}, Animación: ${!!animation}`);
+
   // Si no hay contenido válido, pedir input
   if (!urls.length && !photo && !animation) {
+    console.log('No se encontraron URLs, fotos ni animaciones. Enviando mensaje de error.');
     await bot.sendMessage(chatId, '📩 Por favor, envía al menos un enlace, foto o GIF. Ejemplo: /boton https://ejemplo.com https://otro.com');
     return;
   }
 
   // Enviar mensaje de carga
+  console.log('Enviando mensaje de carga...');
   const loadingMsg = await bot.sendMessage(chatId, '⏳ Generando tu publicación...');
+  console.log(`Mensaje de carga enviado: ${loadingMsg.message_id}`);
 
   // Determinar título y descripción
   let titles = [];
@@ -119,7 +129,7 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
   let imageUrl = null;
 
   if (urls.length) {
-    console.log(`Procesando ${urls.length} enlaces:`, urls);
+    console.log(`Procesando ${urls.length} enlaces...`);
     // Analizar cada enlace
     for (const url of urls) {
       const { title, description, image } = await analyzeLink(url);
@@ -127,9 +137,11 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
       descriptions.push(description);
       if (image && !imageUrl) imageUrl = image; // Usar la primera imagen encontrada
     }
+    console.log('Enlaces procesados:', titles);
   } else {
     titles = [captionText];
     descriptions = ['Contenido multimedia'];
+    console.log('No hay enlaces, usando captionText:', captionText);
   }
 
   // Formatear el mensaje en HTML
@@ -144,11 +156,14 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
     caption += `<b>${titles[0]}</b>\n${descriptions[0]}\n`;
   }
   caption += `\n${SIGNATURE}`;
+  console.log('Caption generado:', caption);
 
   try {
     let sentMessage;
+    console.log('Enviando mensaje final...');
     // Caso 1: Solo enlaces (sin multimedia adjunto)
     if (urls.length && !photo && !animation) {
+      console.log('Caso 1: Solo enlaces');
       if (imageUrl) {
         sentMessage = await bot.sendPhoto(chatId, imageUrl, {
           caption,
@@ -165,6 +180,7 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
     }
     // Caso 2: Solo foto (sin enlaces)
     else if (photo && !urls.length && !animation) {
+      console.log('Caso 2: Solo foto');
       sentMessage = await bot.sendPhoto(chatId, photo, {
         caption,
         parse_mode: 'HTML',
@@ -174,6 +190,7 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
     }
     // Caso 3: Solo GIF (sin enlaces)
     else if (animation && !urls.length && !photo) {
+      console.log('Caso 3: Solo GIF');
       sentMessage = await bot.sendAnimation(chatId, animation, {
         caption,
         parse_mode: 'HTML',
@@ -183,6 +200,7 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
     }
     // Caso 4: Enlaces + Foto
     else if (urls.length && photo && !animation) {
+      console.log('Caso 4: Enlaces + Foto');
       sentMessage = await bot.sendPhoto(chatId, photo, {
         caption,
         parse_mode: 'HTML',
@@ -192,6 +210,7 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
     }
     // Caso 5: Enlaces + GIF
     else if (urls.length && animation && !photo) {
+      console.log('Caso 5: Enlaces + GIF');
       sentMessage = await bot.sendAnimation(chatId, animation, {
         caption,
         parse_mode: 'HTML',
@@ -201,6 +220,7 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
     }
     // Caso 6: Combinaciones no soportadas
     else {
+      console.log('Caso 6: Combinación no soportada');
       await bot.editMessageText('⚠️ Combinación no soportada. Usa enlaces, foto o GIF por separado o con enlaces.', {
         chat_id: chatId,
         message_id: loadingMsg.message_id,
@@ -209,11 +229,13 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
       return;
     }
 
+    console.log(`Mensaje enviado: ${sentMessage.message_id}`);
     // Actualizar los botones con el message_id del mensaje enviado
     await bot.editMessageReplyMarkup(createButtons(urls, sentMessage.message_id), {
       chat_id: chatId,
       message_id: sentMessage.message_id,
     });
+    console.log('Botones actualizados con el nuevo message_id');
 
   } catch (error) {
     console.error(`Error al procesar el comando /boton: ${error.message}`);
