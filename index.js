@@ -33,11 +33,11 @@ function sanitizeText(text) {
     .replace(/[<>&'"]/g, (char) => {
       // Escapar caracteres especiales para HTML
       switch (char) {
-        case '<': return '<';
-        case '>': return '>';
-        case '&': return '&';
-        case "'": return '''; // Corregir el escape de comillas simples
-        case '"': return '"';
+        case '<': return '&lt;';
+        case '>': return '&gt;';
+        case '&': return '&amp;';
+        case "'": return '&apos;'; // Corregido: Escapar comillas simples
+        case '"': return '&quot;';
         default: return char;
       }
     })
