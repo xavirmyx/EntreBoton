@@ -24,13 +24,9 @@ const REDIRECT_BASE_URL = 'https://entreboton.onrender.com/redirect/';
 // Configuración de Supabase (usando variables de entorno)
 const SUPABASE_URL = 'https://ycvkdxzxrzuwnkybmjwf.supabase.co';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4cnp1d25reWJtandmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDI4Mjg4NzYsImV4cCI6MjA1ODQwNDg3Nn0.1ts8XIpysbMe5heIg3oWLfqKxReusZxemw4lk2WZ4GI';
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4cnp1d25reWJtandmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjgyODg3NiwiZXhwIjoyMDU4NDA0ODc2fQ.1oZQbxAEspn8JhgsFRT5r7kG4Sysj3CeFOhmgHo1Ioc';
 
 // Cliente de Supabase con permisos anónimos (para operaciones generales)
-const supabaseAnon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-// Cliente de Supabase con permisos de service_role (para crear tablas)
-const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Mapa para almacenar orígenes de mensajes
 const messageOrigins = new Map();
@@ -42,54 +38,7 @@ const bot = new TelegramBot(TOKEN, { polling: false });
 const app = express();
 app.use(express.json());
 
-// **Función para inicializar las tablas en Supabase**
-async function initializeTables() {
-  console.log('🛠️ Verificando y creando tablas en Supabase...');
-
-  // SQL para crear la tabla `interactions`
-  const interactionsTableSQL = `
-    CREATE TABLE IF NOT EXISTS interactions (
-      id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-      type TEXT NOT NULL,
-      chat_id TEXT NOT NULL,
-      message_id INTEGER NOT NULL,
-      user_id TEXT NOT NULL,
-      username TEXT,
-      timestamp TIMESTAMP DEFAULT NOW() NOT NULL,
-      details TEXT
-    );
-  `;
-
-  // SQL para crear la tabla `short_links`
-  const shortLinksTableSQL = `
-    CREATE TABLE IF NOT EXISTS short_links (
-      id TEXT PRIMARY KEY,
-      original_url TEXT NOT NULL,
-      message_id INTEGER NOT NULL,
-      chat_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      token TEXT NOT NULL,
-      expires_at TIMESTAMP NOT NULL,
-      created_at TIMESTAMP DEFAULT NOW()
-    );
-  `;
-
-  try {
-    // Usamos el cliente con permisos de service_role para crear las tablas
-    const { error: interactionsError } = await supabaseAdmin.rpc('execute_sql', { query: interactionsTableSQL });
-    if (interactionsError) throw new Error(`Error creando tabla interactions: ${interactionsError.message}`);
-
-    const { error: shortLinksError } = await supabaseAdmin.rpc('execute_sql', { query: shortLinksTableSQL });
-    if (shortLinksError) throw new Error(`Error creando tabla short_links: ${shortLinksError.message}`);
-
-    console.log('✅ Tablas creadas o verificadas exitosamente.');
-  } catch (error) {
-    console.error(`❌ Error al inicializar tablas: ${error.message}`);
-    throw error;
-  }
-}
-
-// **Sanitizar texto (corregido)**
+// **Sanitizar texto**
 function sanitizeText(text) {
   if (!text) return '';
   return text.replace(/[<>&'"]/g, char => ({ '<': '<', '>': '>', '&': '&', "'": '\'', '"': '"' }[char] || char)).trim();
@@ -107,7 +56,7 @@ function extractUrls(msg) {
 
 // **Generar token para autenticación**
 function generateToken(userId, shortId) {
-  const secret = 'your-secret-key'; // Cambia esto por una clave secreta segura
+  const secret = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4cnp1d25reWJtandmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjgyODg3NiwiZXhwIjoyMDU4NDA0ODc2fQ.1oZQbxAEspn8JhgsFRT5r7kG4Sysj3CeFOhmgHo1Ioc; // Cambia esto por una clave secreta segura
   return crypto.createHmac('sha256', secret).update(`${userId}-${shortId}`).digest('hex');
 }
 
@@ -116,7 +65,7 @@ async function shortenUrl(originalUrl, messageId, chatId, userId, expiryHours = 
   const shortId = shortid.generate();
   const token = generateToken(userId, shortId);
   const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString();
-  const { error } = await supabaseAnon.from('short_links').insert([{
+  const { error } = await supabase.from('short_links').insert([{
     id: shortId,
     original_url: originalUrl,
     message_id: messageId,
@@ -213,7 +162,7 @@ bot.on('message', async (msg) => {
   }
 
   // Registrar en Supabase
-  const { error } = await supabaseAnon.from('interactions').insert([{
+  const { error } = await supabase.from('interactions').insert([{
     type: 'forward',
     chat_id: originalChatId,
     message_id: forwardedMessageId,
@@ -230,7 +179,7 @@ app.get('/redirect/:shortId', async (req, res) => {
   const { shortId } = req.params;
   const { token } = req.query;
 
-  const { data, error } = await supabaseAnon.from('short_links').select('*').eq('id', shortId).single();
+  const { data, error } = await supabase.from('short_links').select('*').eq('id', shortId).single();
   if (error || !data) return res.status(404).send('Enlace no encontrado');
 
   const { original_url, user_id, token: storedToken, expires_at } = data;
@@ -244,7 +193,7 @@ app.get('/redirect/:shortId', async (req, res) => {
   }
 
   // Registrar clic
-  await supabaseAnon.from('interactions').insert([{
+  await supabase.from('interactions').insert([{
     type: 'click',
     chat_id: data.chat_id,
     message_id: data.message_id,
@@ -260,7 +209,7 @@ app.get('/redirect/:shortId', async (req, res) => {
 // **Comando /visto**
 bot.onText(/\/visto/, async (msg) => {
   const chatId = msg.chat.id;
-  const { data, error } = await supabaseAnon.from('interactions').select('*').eq('chat_id', chatId);
+  const { data, error } = await supabase.from('interactions').select('*').eq('chat_id', chatId);
   if (error) return bot.sendMessage(chatId, '⚠️ Error al obtener interacciones.');
 
   if (!data.length) return bot.sendMessage(chatId, '📊 No hay interacciones registradas.');
@@ -280,5 +229,4 @@ app.post('/webhook', (req, res) => {
 app.listen(PORT, async () => {
   console.log(`✅ Servidor en puerto ${PORT}`);
   await bot.setWebHook(WEBHOOK_URL);
-  await initializeTables(); // Inicializar tablas al arrancar
 });
