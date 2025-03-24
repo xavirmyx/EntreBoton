@@ -101,21 +101,52 @@ async function shortenUrl(originalUrl, messageId, chatId, userId, username, expi
   return { shortId, token };
 }
 
+// **Dividir mensaje en partes si excede el límite de Telegram (4096 caracteres)**
+function splitMessage(text, maxLength = 4096) {
+  const parts = [];
+  let currentPart = '';
+
+  const lines = text.split('\n');
+  for (const line of lines) {
+    if (currentPart.length + line.length + 1 > maxLength) {
+      parts.push(currentPart.trim());
+      currentPart = '';
+    }
+    currentPart += line + '\n';
+  }
+
+  if (currentPart.trim()) {
+    parts.push(currentPart.trim());
+  }
+
+  return parts;
+}
+
 // **Estructurar mensaje con enlaces acortados**
 async function structureMessage(text, urls, messageId, chatId, userId, username) {
   if (!text && !urls.length) return { formattedText: '', urlPositions: [] };
   let formattedText = text || '';
   const urlPositions = [];
-  for (let i = 0; i < urls.length; i++) {
-    const shortLink = await shortenUrl(urls[i], messageId, chatId, userId, username);
+
+  // Procesar todos los enlaces en paralelo
+  const shortLinksPromises = urls.map(async (url, i) => {
+    const shortLink = await shortenUrl(url, messageId, chatId, userId, username);
     if (shortLink) {
       const { shortId, token } = shortLink;
       const shortUrl = `${REDIRECT_BASE_URL}${shortId}?token=${token}`;
-      // Ofuscar el enlace para dificultar la copia
-      formattedText = formattedText.replace(urls[i], `<a href="${shortUrl}">🔗 Enlace ${i + 1}</a>`);
-      urlPositions.push({ url: urls[i], shortUrl });
+      return { index: i, url, shortUrl };
     }
+    return null;
+  });
+
+  const shortLinks = (await Promise.all(shortLinksPromises)).filter(link => link !== null);
+
+  // Reemplazar los enlaces en el texto
+  for (const { url, shortUrl, index } of shortLinks) {
+    formattedText = formattedText.replace(url, `<a href="${shortUrl}">🔗 Enlace ${index + 1}</a>`);
+    urlPositions.push({ url, shortUrl });
   }
+
   return { formattedText, urlPositions };
 }
 
@@ -198,18 +229,37 @@ bot.on('message', async (msg) => {
   caption += `${SIGNATURE}${WARNING_MESSAGE}`;
 
   try {
+    // Dividir el mensaje en partes si es necesario
+    const messageParts = splitMessage(caption);
     let sentMessage;
+
     if (photo) {
       await bot.deleteMessage(channel.chat_id, loadingMsg.message_id, { message_thread_id: channel.thread_id });
-      sentMessage = await bot.sendPhoto(channel.chat_id, photo, { caption, message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
+      // Enviar la imagen con la primera parte de la descripción
+      sentMessage = await bot.sendPhoto(channel.chat_id, photo, { caption: messageParts[0], message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
+      // Enviar las partes restantes como mensajes de texto
+      for (let i = 1; i < messageParts.length; i++) {
+        await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
+      }
     } else if (video) {
       await bot.deleteMessage(channel.chat_id, loadingMsg.message_id, { message_thread_id: channel.thread_id });
-      sentMessage = await bot.sendVideo(channel.chat_id, video, { caption, message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
+      sentMessage = await bot.sendVideo(channel.chat_id, video, { caption: messageParts[0], message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
+      for (let i = 1; i < messageParts.length; i++) {
+        await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
+      }
     } else if (animation) {
       await bot.deleteMessage(channel.chat_id, loadingMsg.message_id, { message_thread_id: channel.thread_id });
-      sentMessage = await bot.sendAnimation(channel.chat_id, animation, { caption, message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
+      sentMessage = await bot.sendAnimation(channel.chat_id, animation, { caption: messageParts[0], message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
+      for (let i = 1; i < messageParts.length; i++) {
+        await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
+      }
     } else {
-      sentMessage = await bot.editMessageText(caption, { chat_id: channel.chat_id, message_id: loadingMsg.message_id, message_thread_id: channel.thread_id, parse_mode: 'HTML', disable_web_page_preview: true, protect_content: true });
+      await bot.deleteMessage(channel.chat_id, loadingMsg.message_id, { message_thread_id: channel.thread_id });
+      // Enviar todas las partes como mensajes de texto
+      sentMessage = await bot.sendMessage(channel.chat_id, messageParts[0], { message_thread_id: channel.thread_id, parse_mode: 'HTML', disable_web_page_preview: true, protect_content: true });
+      for (let i = 1; i < messageParts.length; i++) {
+        await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', disable_web_page_preview: true, protect_content: true });
+      }
     }
     messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: caption });
     stats.messagesProcessed++;
