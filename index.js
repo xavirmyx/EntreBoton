@@ -82,21 +82,29 @@ async function shortenUrl(originalUrl, messageId, chatId, userId, username, expi
   const shortId = shortid.generate();
   const token = generateToken(userId, shortId, 'initial'); // Token inicial, se actualizará con la IP al hacer clic
   const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString();
-  const { error } = await supabase.from('short_links').insert([{
+
+  const dataToInsert = {
     id: shortId,
     original_url: originalUrl,
     message_id: messageId,
     chat_id: chatId,
     user_id: userId,
-    username: username || 'unknown',
     token,
     expires_at: expiresAt,
     ip_address: null // Se actualizará al hacer clic
-  }]);
+  };
+
+  // Solo añadir el campo username si está definido
+  if (username) {
+    dataToInsert.username = username;
+  }
+
+  const { error } = await supabase.from('short_links').insert([dataToInsert]);
   if (error) {
     console.error(`❌ Error al guardar enlace acortado: ${error.message}`);
     return null;
   }
+  console.log(`✅ Enlace acortado guardado en Supabase: ${shortId}`);
   stats.clicksTracked++;
   return { shortId, token };
 }
@@ -128,6 +136,8 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
   let formattedText = text || '';
   const urlPositions = [];
 
+  console.log(`📝 Procesando ${urls.length} enlaces...`);
+
   // Procesar todos los enlaces en paralelo
   const shortLinksPromises = urls.map(async (url, i) => {
     const shortLink = await shortenUrl(url, messageId, chatId, userId, username);
@@ -136,6 +146,7 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
       const shortUrl = `${REDIRECT_BASE_URL}${shortId}?token=${token}`;
       return { index: i, url, shortUrl };
     }
+    console.warn(`⚠️ No se pudo acortar el enlace: ${url}`);
     return null;
   });
 
@@ -147,6 +158,7 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
     urlPositions.push({ url, shortUrl });
   }
 
+  console.log(`✅ ${shortLinks.length} enlaces acortados y reemplazados en el texto.`);
   return { formattedText, urlPositions };
 }
 
@@ -322,7 +334,11 @@ bot.on('message', async (msg) => {
     timestamp: new Date().toISOString(),
     details: `Reenviado a: ${msg.chat.id}`
   }]);
-  if (error) console.error(`❌ Error al registrar reenvío: ${error.message}`);
+  if (error) {
+    console.error(`❌ Error al registrar reenvío: ${error.message}`);
+  } else {
+    console.log(`✅ Reenvío registrado en Supabase: ${username} reenvió mensaje ${forwardedMessageId}`);
+  }
   stats.forwardsDetected++;
 });
 
@@ -333,7 +349,10 @@ app.get('/redirect/:shortId', async (req, res) => {
   const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
   const { data, error } = await supabase.from('short_links').select('*').eq('id', shortId).single();
-  if (error || !data) return res.status(404).send('Enlace no encontrado');
+  if (error || !data) {
+    console.error(`❌ Error al buscar enlace acortado: ${error?.message || 'No encontrado'}`);
+    return res.status(404).send('Enlace no encontrado');
+  }
 
   const { original_url, user_id, username, token: storedToken, expires_at, ip_address } = data;
 
@@ -354,11 +373,16 @@ app.get('/redirect/:shortId', async (req, res) => {
 
   // Actualizar IP y token si es la primera vez
   if (!ip_address) {
-    await supabase.from('short_links').update({ ip_address: ipAddress, token: expectedToken }).eq('id', shortId);
+    const { error: updateError } = await supabase.from('short_links').update({ ip_address: ipAddress, token: expectedToken }).eq('id', shortId);
+    if (updateError) {
+      console.error(`❌ Error al actualizar IP en enlace acortado: ${updateError.message}`);
+    } else {
+      console.log(`✅ IP actualizada en enlace acortado: ${shortId}`);
+    }
   }
 
   // Registrar clic
-  await supabase.from('interactions').insert([{
+  const { error: insertError } = await supabase.from('interactions').insert([{
     type: 'click',
     chat_id: data.chat_id,
     message_id: data.message_id,
@@ -367,6 +391,11 @@ app.get('/redirect/:shortId', async (req, res) => {
     timestamp: new Date().toISOString(),
     details: `Clic en: ${original_url} desde IP: ${ipAddress}`
   }]);
+  if (insertError) {
+    console.error(`❌ Error al registrar clic: ${insertError.message}`);
+  } else {
+    console.log(`✅ Clic registrado en Supabase: ${username} hizo clic en ${original_url}`);
+  }
 
   res.redirect(original_url);
 });
@@ -381,7 +410,10 @@ bot.onText(/\/visto/, async (msg) => {
 
   const channel = CANALES_ESPECIFICOS[chatId];
   const { data, error } = await supabase.from('interactions').select('*').eq('chat_id', chatId);
-  if (error) return bot.sendMessage(channel.chat_id, '⚠️ Error al obtener interacciones.', { message_thread_id: channel.thread_id });
+  if (error) {
+    console.error(`❌ Error al obtener interacciones: ${error.message}`);
+    return bot.sendMessage(channel.chat_id, '⚠️ Error al obtener interacciones.', { message_thread_id: channel.thread_id });
+  }
 
   if (!data.length) return bot.sendMessage(channel.chat_id, '📊 No hay interacciones registradas.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
   let response = '<b>📊 Interacciones:</b>\n\n';
