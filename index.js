@@ -31,6 +31,16 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 // Mapa para almacenar orígenes de mensajes
 const messageOrigins = new Map();
 
+// Lista de usuarios bloqueados (almacenada en memoria, podrías moverla a Supabase para persistencia)
+const bannedUsers = new Set();
+
+// Estadísticas del bot (almacenadas en memoria, podrías moverlas a Supabase para persistencia)
+const stats = {
+  messagesProcessed: 0,
+  forwardsDetected: 0,
+  clicksTracked: 0
+};
+
 // Crear el bot con webhook
 const bot = new TelegramBot(TOKEN, { polling: false });
 
@@ -56,7 +66,7 @@ function extractUrls(msg) {
 
 // **Generar token para autenticación**
 function generateToken(userId, shortId) {
-  const secret = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4cnp1d25reWJtandmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjgyODg3NiwiZXhwIjoyMDU4NDA0ODc2fQ.1oZQbxAEspn8JhgsFRT5r7kG4Sysj3CeFOhmgHo1Ioc; // Cambia esto por una clave secreta segura
+  const secret = process.env.TOKEN_SECRET || 'tu-clave-secreta-aqui-32-caracteres'; // Usa una variable de entorno para mayor seguridad
   return crypto.createHmac('sha256', secret).update(`${userId}-${shortId}`).digest('hex');
 }
 
@@ -78,6 +88,7 @@ async function shortenUrl(originalUrl, messageId, chatId, userId, expiryHours = 
     console.error(`❌ Error al guardar enlace acortado: ${error.message}`);
     return null;
   }
+  stats.clicksTracked++;
   return `${REDIRECT_BASE_URL}${shortId}?token=${token}`;
 }
 
@@ -96,10 +107,51 @@ async function structureMessage(text, urls, messageId, chatId, userId) {
   return { formattedText, urlPositions };
 }
 
+// **Verificar si el usuario es administrador**
+async function isAdmin(chatId, userId) {
+  try {
+    const { members } = await bot.getChatAdministrators(chatId);
+    return members.some(member => member.user.id === userId);
+  } catch (error) {
+    console.error(`❌ Error al verificar administrador: ${error.message}`);
+    return false;
+  }
+}
+
+// **Comando /start**
+bot.onText(/\/start/, async (msg) => {
+  const chatId = msg.chat.id;
+  const welcomeMessage = `
+<b>¡Bienvenido a EntresHijos! ✨</b>
+
+Soy un bot diseñado para proteger el contenido exclusivo de este grupo. Aquí tienes algunas cosas que puedo hacer:
+
+📌 <b>Proteger enlaces:</b> Convierto los enlaces en enlaces acortados y protegidos que expiran después de 24 horas.
+📸 <b>Proteger multimedia:</b> Evito que las fotos, videos y GIFs sean reenviados.
+🚨 <b>Detectar reenvíos:</b> Si alguien reenvía un mensaje exclusivo, lo detectaré y notificaré al grupo.
+📊 <b>Ver interacciones:</b> Usa /visto para ver quién ha interactuado con los mensajes.
+
+<b>Comandos útiles:</b>
+/visto - Ver interacciones (reenvíos y clics).
+/stats - Ver estadísticas del bot.
+/banuser <user_id> - (Admins) Bloquear a un usuario para que no pueda reenviar mensajes.
+
+¡Envía un enlace, foto, video o GIF para empezar! 🚀
+  `;
+  await bot.sendMessage(chatId, welcomeMessage, { parse_mode: 'HTML' });
+});
+
 // **Procesar mensajes**
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id.toString();
+
+  // Verificar si el usuario está bloqueado
+  if (bannedUsers.has(userId)) {
+    await bot.sendMessage(chatId, `🚫 Lo siento, ${msg.from.first_name}, has sido bloqueado por compartir contenido exclusivo. Contacta a un administrador para resolver esto.`, { parse_mode: 'HTML' });
+    return;
+  }
+
   const text = sanitizeText(msg.text || msg.caption);
   const urls = extractUrls(msg);
   const photo = msg.photo ? msg.photo[msg.photo.length - 1].file_id : null;
@@ -132,6 +184,7 @@ bot.on('message', async (msg) => {
       return;
     }
     messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: caption });
+    stats.messagesProcessed++;
   } catch (error) {
     console.error(`❌ Error al procesar mensaje: ${error.message}`);
     await bot.editMessageText('⚠️ Error al generar publicación.', { chat_id: chatId, message_id: loadingMsg.message_id, parse_mode: 'HTML' });
@@ -156,7 +209,7 @@ bot.on('message', async (msg) => {
   // Intentar eliminar mensaje reenviado
   try {
     await bot.deleteMessage(msg.chat.id, msg.message_id);
-    await bot.sendMessage(msg.chat.id, '🚫 Mensaje eliminado por compartir contenido exclusivo.', { parse_mode: 'HTML' });
+    await bot.sendMessage(msg.chat.id, `🚫 Mensaje eliminado por compartir contenido exclusivo, ${userName}.`, { parse_mode: 'HTML' });
   } catch (error) {
     console.error(`❌ No se pudo eliminar el mensaje: ${error.message}`);
   }
@@ -172,6 +225,7 @@ bot.on('message', async (msg) => {
     details: `Reenviado a: ${msg.chat.id}`
   }]);
   if (error) console.error(`❌ Error al registrar reenvío: ${error.message}`);
+  stats.forwardsDetected++;
 });
 
 // **Manejar clics en enlaces**
@@ -218,6 +272,39 @@ bot.onText(/\/visto/, async (msg) => {
     response += `<b>ID:</b> ${r.message_id}\n<b>Acción:</b> ${r.type}\n<b>Usuario:</b> ${r.username || 'Desconocido'}\n<b>Hora:</b> ${new Date(r.timestamp).toLocaleString('es-ES')}\n<b>Detalles:</b> ${r.details}\n\n`;
   });
   await bot.sendMessage(chatId, response, { parse_mode: 'HTML' });
+});
+
+// **Comando /stats**
+bot.onText(/\/stats/, async (msg) => {
+  const chatId = msg.chat.id;
+  const statsMessage = `
+<b>📈 Estadísticas de EntresHijos:</b>
+
+📩 <b>Mensajes procesados:</b> ${stats.messagesProcessed}
+🚨 <b>Reenvíos detectados:</b> ${stats.forwardsDetected}
+🔗 <b>Clics rastreados:</b> ${stats.clicksTracked}
+🚫 <b>Usuarios bloqueados:</b> ${bannedUsers.size}
+
+¡Gracias por usar EntresHijos! ✨
+  `;
+  await bot.sendMessage(chatId, statsMessage, { parse_mode: 'HTML' });
+});
+
+// **Comando /banuser (solo para administradores)**
+bot.onText(/\/banuser (\d+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  const targetUserId = match[1];
+
+  // Verificar si el usuario es administrador
+  const isUserAdmin = await isAdmin(chatId, userId);
+  if (!isUserAdmin) {
+    await bot.sendMessage(chatId, '🚫 Solo los administradores pueden usar este comando.', { parse_mode: 'HTML' });
+    return;
+  }
+
+  bannedUsers.add(targetUserId);
+  await bot.sendMessage(chatId, `🚫 El usuario con ID ${targetUserId} ha sido bloqueado y no podrá reenviar mensajes.`, { parse_mode: 'HTML' });
 });
 
 // **Configurar webhook y arrancar**
