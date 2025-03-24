@@ -35,11 +35,11 @@ function sanitizeText(text) {
     .replace(/[<>&'"]/g, (char) => {
       // Escapar caracteres especiales para HTML
       switch (char) {
-        case '<': return '<';
-        case '>': return '>';
-        case '&': return '&';
-        case "'": return ''';
-        case '"': return '"';
+        case '<': return '&lt;';
+        case '>': return '&gt;';
+        case '&': return '&amp;';
+        case "'": return '&apos;'; // Corregir el escape de comillas simples
+        case '"': return '&quot;';
         default: return char;
       }
     })
@@ -103,7 +103,7 @@ function extractUrls(text) {
 bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
   console.log('Recibido comando /boton:', JSON.stringify(msg, null, 2));
   const chatId = msg.chat.id;
-  const text = match[1] || msg.caption || null; // Usar msg.caption si el mensaje tiene una foto
+  const text = match ? match[1] : msg.caption || null; // Usar msg.caption si el mensaje tiene una foto
   const urls = extractUrls(text); // Extraer todos los enlaces
   const photo = msg.photo ? msg.photo[msg.photo.length - 1].file_id : null;
   const animation = msg.animation ? msg.animation.file_id : null;
