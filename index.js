@@ -16,8 +16,8 @@ const SIGNATURE = '✨ EntresHijos ✨';
 const PORT = process.env.PORT || 8443;
 const WEBHOOK_URL = 'https://entreboton.onrender.com/webhook';
 
-// Crear el bot
-const bot = new TelegramBot(TOKEN);
+// Crear el bot con opciones para webhook
+const bot = new TelegramBot(TOKEN, { polling: false });
 
 // Crear el servidor Express
 const app = express();
@@ -60,7 +60,7 @@ function createButtons(url = null) {
 
 // Comando /boton
 bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
-  console.log('Recibido comando /boton:', msg); // Añadir log para depurar
+  console.log('Recibido comando /boton:', msg);
   const chatId = msg.chat.id;
   const url = match[1] || null;
   const photo = msg.photo ? msg.photo[msg.photo.length - 1].file_id : null;
@@ -163,12 +163,12 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
 
 // Configurar el webhook
 app.get('/', (req, res) => {
-  console.log('Recibida solicitud GET en /'); // Añadir log para depurar
+  console.log('Recibida solicitud GET en /');
   res.send('This is a Telegram webhook server. Please use POST requests for updates.');
 });
 
 app.post('/webhook', (req, res) => {
-  console.log('Recibida solicitud POST en /webhook:', req.body); // Añadir log para depurar
+  console.log('Recibida solicitud POST en /webhook:', req.body);
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
@@ -177,7 +177,7 @@ app.post('/webhook', (req, res) => {
 app.listen(PORT, async () => {
   console.log(`Servidor iniciado en el puerto ${PORT}`);
   try {
-    await bot.setWebhook(WEBHOOK_URL);
+    await bot.setWebHook(WEBHOOK_URL); // Usar setWebHook en lugar de setWebhook
     console.log(`Webhook configurado en ${WEBHOOK_URL}`);
   } catch (error) {
     console.error(`Error al configurar el webhook: ${error.message}`);
