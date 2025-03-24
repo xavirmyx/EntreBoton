@@ -23,6 +23,16 @@ const bot = new TelegramBot(TOKEN, { polling: false });
 const app = express();
 app.use(express.json());
 
+// Función para sanitizar texto (eliminar caracteres problemáticos)
+function sanitizeText(text) {
+  if (!text) return '';
+  // Reemplazar caracteres problemáticos y asegurarse de que el texto sea UTF-8
+  return text
+    .replace(/[\r\n]+/g, ' ') // Reemplazar saltos de línea por espacios
+    .replace(/[^\x20-\x7E]+/g, '') // Eliminar caracteres no ASCII (excepto los básicos)
+    .trim();
+}
+
 // Función para analizar enlaces
 async function analyzeLink(url) {
   try {
@@ -34,9 +44,11 @@ async function analyzeLink(url) {
 
     // Extraer título
     let title = $('meta[property="og:title"]').attr('content') || $('title').text() || 'Sin título';
+    title = sanitizeText(title);
 
     // Extraer descripción
     let description = $('meta[property="og:description"]').attr('content') || 'Visita este enlace para más info.';
+    description = sanitizeText(description);
 
     // Extraer imagen (si existe)
     let imageUrl = $('meta[property="og:image"]').attr('content') || null;
@@ -48,28 +60,38 @@ async function analyzeLink(url) {
   }
 }
 
-// Función para generar botones inline
-function createButtons(url = null) {
+// Función para generar botones inline para múltiples enlaces
+function createButtons(urls) {
   const keyboard = [];
-  if (url) {
-    keyboard.push([{ text: '🔗 Abrir enlace', url }]);
-  }
+  // Añadir un botón para cada enlace
+  urls.forEach((url, index) => {
+    keyboard.push([{ text: `🔗 Enlace ${index + 1}`, url }]);
+  });
+  // Añadir botón de compartir
   keyboard.push([{ text: '📲 Compartir', switch_inline_query: '' }]);
   return { inline_keyboard: keyboard };
 }
 
+// Función para extraer todos los enlaces del texto
+function extractUrls(text) {
+  if (!text) return [];
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  return text.match(urlRegex) || [];
+}
+
 // Comando /boton
 bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
-  console.log('Recibido comando /boton:', msg);
+  console.log('Recibido comando /boton:', JSON.stringify(msg, null, 2));
   const chatId = msg.chat.id;
-  const url = match[1] || null;
+  const text = match[1] || null;
+  const urls = extractUrls(text); // Extraer todos los enlaces
   const photo = msg.photo ? msg.photo[msg.photo.length - 1].file_id : null;
   const animation = msg.animation ? msg.animation.file_id : null;
   const captionText = msg.caption || 'Publicación';
 
   // Si no hay contenido válido, pedir input
-  if (!url && !photo && !animation) {
-    await bot.sendMessage(chatId, '📩 Por favor, envía un enlace, foto o GIF. Ejemplo: /boton https://ejemplo.com');
+  if (!urls.length && !photo && !animation) {
+    await bot.sendMessage(chatId, '📩 Por favor, envía al menos un enlace, foto o GIF. Ejemplo: /boton https://ejemplo.com https://otro.com');
     return;
   }
 
@@ -77,22 +99,41 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
   const loadingMsg = await bot.sendMessage(chatId, '⏳ Generando tu publicación...');
 
   // Determinar título y descripción
-  let title, description, imageUrl;
-  if (url) {
-    ({ title, description, imageUrl } = await analyzeLink(url));
+  let titles = [];
+  let descriptions = [];
+  let imageUrl = null;
+
+  if (urls.length) {
+    // Analizar cada enlace
+    for (const url of urls) {
+      const { title, description, image } = await analyzeLink(url);
+      titles.push(title);
+      descriptions.push(description);
+      if (image && !imageUrl) imageUrl = image; // Usar la primera imagen encontrada
+    }
   } else {
-    title = captionText;
-    description = 'Contenido multimedia';
-    imageUrl = null;
+    titles = [captionText];
+    descriptions = ['Contenido multimedia'];
   }
 
   // Formatear el mensaje
-  const caption = `📢 *${title}*\n${description}\n\n${SIGNATURE}`;
-  const replyMarkup = createButtons(url);
+  let caption = '📢 ';
+  if (urls.length) {
+    // Si hay múltiples enlaces, enumerarlos
+    titles.forEach((title, index) => {
+      caption += `*Enlace ${index + 1}: ${title}*\n${descriptions[index]}\n`;
+    });
+  } else {
+    // Si no hay enlaces, usar el título y descripción por defecto
+    caption += `*${titles[0]}*\n${descriptions[0]}\n`;
+  }
+  caption += `\n${SIGNATURE}`;
+
+  const replyMarkup = createButtons(urls);
 
   try {
-    // Caso 1: Solo enlace (sin multimedia adjunto)
-    if (url && !photo && !animation) {
+    // Caso 1: Solo enlaces (sin multimedia adjunto)
+    if (urls.length && !photo && !animation) {
       if (imageUrl) {
         await bot.sendPhoto(chatId, imageUrl, {
           caption,
@@ -107,8 +148,8 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
       }
       await bot.deleteMessage(chatId, loadingMsg.message_id);
     }
-    // Caso 2: Solo foto (sin enlace)
-    else if (photo && !url && !animation) {
+    // Caso 2: Solo foto (sin enlaces)
+    else if (photo && !urls.length && !animation) {
       await bot.sendPhoto(chatId, photo, {
         caption,
         parse_mode: 'Markdown',
@@ -116,8 +157,8 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
       });
       await bot.deleteMessage(chatId, loadingMsg.message_id);
     }
-    // Caso 3: Solo GIF (sin enlace)
-    else if (animation && !url && !photo) {
+    // Caso 3: Solo GIF (sin enlaces)
+    else if (animation && !urls.length && !photo) {
       await bot.sendAnimation(chatId, animation, {
         caption,
         parse_mode: 'Markdown',
@@ -125,8 +166,8 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
       });
       await bot.deleteMessage(chatId, loadingMsg.message_id);
     }
-    // Caso 4: Enlace + Foto
-    else if (url && photo && !animation) {
+    // Caso 4: Enlaces + Foto
+    else if (urls.length && photo && !animation) {
       await bot.sendPhoto(chatId, photo, {
         caption,
         parse_mode: 'Markdown',
@@ -134,8 +175,8 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
       });
       await bot.deleteMessage(chatId, loadingMsg.message_id);
     }
-    // Caso 5: Enlace + GIF
-    else if (url && animation && !photo) {
+    // Caso 5: Enlaces + GIF
+    else if (urls.length && animation && !photo) {
       await bot.sendAnimation(chatId, animation, {
         caption,
         parse_mode: 'Markdown',
@@ -145,7 +186,7 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
     }
     // Caso 6: Combinaciones no soportadas
     else {
-      await bot.editMessageText('⚠️ Combinación no soportada. Usa enlace, foto o GIF por separado o con enlace.', {
+      await bot.editMessageText('⚠️ Combinación no soportada. Usa enlaces, foto o GIF por separado o con enlaces.', {
         chat_id: chatId,
         message_id: loadingMsg.message_id,
         parse_mode: 'Markdown',
@@ -168,7 +209,7 @@ app.get('/', (req, res) => {
 });
 
 app.post('/webhook', (req, res) => {
-  console.log('Recibida solicitud POST en /webhook:', req.body);
+  console.log('Recibida solicitud POST en /webhook:', JSON.stringify(req.body, null, 2));
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
@@ -177,7 +218,7 @@ app.post('/webhook', (req, res) => {
 app.listen(PORT, async () => {
   console.log(`Servidor iniciado en el puerto ${PORT}`);
   try {
-    await bot.setWebHook(WEBHOOK_URL); // Usar setWebHook en lugar de setWebhook
+    await bot.setWebHook(WEBHOOK_URL);
     console.log(`Webhook configurado en ${WEBHOOK_URL}`);
   } catch (error) {
     console.error(`Error al configurar el webhook: ${error.message}`);
