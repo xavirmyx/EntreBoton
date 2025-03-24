@@ -103,8 +103,8 @@ async function shortenUrl(originalUrl, messageId, chatId, userId, username, expi
 
 // **Estructurar mensaje con enlaces acortados**
 async function structureMessage(text, urls, messageId, chatId, userId, username) {
-  if (!text) return { formattedText: '', urlPositions: [] };
-  let formattedText = text;
+  if (!text && !urls.length) return { formattedText: '', urlPositions: [] };
+  let formattedText = text || '';
   const urlPositions = [];
   for (let i = 0; i < urls.length; i++) {
     const shortLink = await shortenUrl(urls[i], messageId, chatId, userId, username);
@@ -133,7 +133,10 @@ async function isAdmin(chatId, userId) {
 // **Comando /start**
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id.toString();
+  const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
+
   if (!GRUPOS_PREDEFINIDOS[chatId]) return; // Ignorar si no es el grupo permitido
+  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return; // Ignorar si no es el canal específico
 
   const channel = CANALES_ESPECIFICOS[chatId];
   const welcomeMessage = `
@@ -159,7 +162,10 @@ Soy un bot diseñado para proteger el contenido exclusivo de este grupo. Aquí t
 // **Procesar mensajes**
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id.toString();
+  const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
+
   if (!GRUPOS_PREDEFINIDOS[chatId]) return; // Ignorar si no es el grupo permitido
+  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return; // Ignorar si no es el canal específico
 
   const userId = msg.from.id.toString();
   const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
@@ -182,26 +188,28 @@ bot.on('message', async (msg) => {
 
   const channel = CANALES_ESPECIFICOS[chatId];
   const loadingMsg = await bot.sendMessage(channel.chat_id, '⏳ Generando publicación...', { message_thread_id: channel.thread_id });
-  const { formattedText } = await structureMessage(text, urls, loadingMsg.message_id, chatId, userId, username);
-  let caption = formattedText || '📢 Publicación';
+
+  // Procesar enlaces si existen
+  let caption = text || '📢 Publicación';
+  if (urls.length) {
+    const { formattedText } = await structureMessage(text, urls, loadingMsg.message_id, chatId, userId, username);
+    caption = formattedText || '📢 Publicación';
+  }
   caption += `${SIGNATURE}${WARNING_MESSAGE}`;
 
   try {
     let sentMessage;
-    if (urls.length && !photo && !video && !animation) {
-      sentMessage = await bot.editMessageText(caption, { chat_id: channel.chat_id, message_id: loadingMsg.message_id, message_thread_id: channel.thread_id, parse_mode: 'HTML', disable_web_page_preview: true, protect_content: true });
-    } else if (photo && !urls.length) {
+    if (photo) {
       await bot.deleteMessage(channel.chat_id, loadingMsg.message_id, { message_thread_id: channel.thread_id });
       sentMessage = await bot.sendPhoto(channel.chat_id, photo, { caption, message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
-    } else if (video && !urls.length) {
+    } else if (video) {
       await bot.deleteMessage(channel.chat_id, loadingMsg.message_id, { message_thread_id: channel.thread_id });
       sentMessage = await bot.sendVideo(channel.chat_id, video, { caption, message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
-    } else if (animation && !urls.length) {
+    } else if (animation) {
       await bot.deleteMessage(channel.chat_id, loadingMsg.message_id, { message_thread_id: channel.thread_id });
       sentMessage = await bot.sendAnimation(channel.chat_id, animation, { caption, message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
     } else {
-      await bot.editMessageText('⚠️ Usa solo un tipo de contenido (enlaces, foto, video o GIF).', { chat_id: channel.chat_id, message_id: loadingMsg.message_id, message_thread_id: channel.thread_id, parse_mode: 'HTML' });
-      return;
+      sentMessage = await bot.editMessageText(caption, { chat_id: channel.chat_id, message_id: loadingMsg.message_id, message_thread_id: channel.thread_id, parse_mode: 'HTML', disable_web_page_preview: true, protect_content: true });
     }
     messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: caption });
     stats.messagesProcessed++;
@@ -316,7 +324,10 @@ app.get('/redirect/:shortId', async (req, res) => {
 // **Comando /visto**
 bot.onText(/\/visto/, async (msg) => {
   const chatId = msg.chat.id.toString();
+  const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
+
   if (!GRUPOS_PREDEFINIDOS[chatId]) return; // Ignorar si no es el grupo permitido
+  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return; // Ignorar si no es el canal específico
 
   const channel = CANALES_ESPECIFICOS[chatId];
   const { data, error } = await supabase.from('interactions').select('*').eq('chat_id', chatId);
@@ -333,7 +344,10 @@ bot.onText(/\/visto/, async (msg) => {
 // **Comando /stats**
 bot.onText(/\/stats/, async (msg) => {
   const chatId = msg.chat.id.toString();
+  const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
+
   if (!GRUPOS_PREDEFINIDOS[chatId]) return; // Ignorar si no es el grupo permitido
+  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return; // Ignorar si no es el canal específico
 
   const channel = CANALES_ESPECIFICOS[chatId];
   const statsMessage = `
@@ -352,7 +366,10 @@ bot.onText(/\/stats/, async (msg) => {
 // **Comando /banuser (solo para administradores)**
 bot.onText(/\/banuser (\d+)/, async (msg, match) => {
   const chatId = msg.chat.id.toString();
+  const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
+
   if (!GRUPOS_PREDEFINIDOS[chatId]) return; // Ignorar si no es el grupo permitido
+  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return; // Ignorar si no es el canal específico
 
   const userId = msg.from.id;
   const targetUserId = match[1];
