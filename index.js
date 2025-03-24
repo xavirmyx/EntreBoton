@@ -31,7 +31,7 @@ function sanitizeText(text) {
   if (!text) return '';
   // Reemplazar caracteres problemáticos y asegurarse de que el texto sea seguro para HTML
   return text
-    .replace(/[\r\n]+/g, ' ') // Reemplazar saltos de línea por espacios
+    .replace(/[\r\n]+/g, '\n') // Mantener saltos de línea
     .replace(/[<>&'"]/g, (char) => {
       // Escapar caracteres especiales para HTML
       switch (char) {
@@ -114,21 +114,50 @@ function extractUrls(msg) {
   return urls;
 }
 
+// Función para estructurar el mensaje con los enlaces
+function structureMessage(text, urls) {
+  if (!text) return { formattedText: '', urlPositions: [] };
+
+  const lines = text.split('\n');
+  let formattedText = '';
+  let urlPositions = [];
+  let urlIndex = 0;
+
+  for (let line of lines) {
+    // Buscar si la línea contiene un enlace
+    const urlInLine = urls.find(url => line.includes(url));
+    if (urlInLine) {
+      // Guardar la posición del enlace
+      urlPositions.push({ url: urlInLine, lineIndex: lines.indexOf(line) });
+      // Reemplazar el enlace con el texto del botón
+      line = line.replace(urlInLine, `(enlace ${urlIndex + 1})`);
+      urlIndex++;
+    }
+    formattedText += line + '\n';
+  }
+
+  // Eliminar el comando /boton del texto
+  formattedText = formattedText.replace(/\/boton\s*/, '');
+
+  return { formattedText: formattedText.trim(), urlPositions };
+}
+
 // Comando /boton
 bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
   console.log('Recibido comando /boton:', JSON.stringify(msg, null, 2));
   const chatId = msg.chat.id;
+  const text = msg.text || msg.caption || '';
   const urls = extractUrls(msg); // Extraer todos los enlaces
   const photo = msg.photo ? msg.photo[msg.photo.length - 1].file_id : null;
+  const video = msg.video ? msg.video.file_id : null;
   const animation = msg.animation ? msg.animation.file_id : null;
-  const captionText = msg.caption || msg.text || 'Publicación';
 
-  console.log(`URLs encontradas: ${urls.length}, Foto: ${!!photo}, Animación: ${!!animation}`);
+  console.log(`URLs encontradas: ${urls.length}, Foto: ${!!photo}, Video: ${!!video}, Animación: ${!!animation}`);
 
   // Si no hay contenido válido, pedir input
-  if (!urls.length && !photo && !animation) {
-    console.log('No se encontraron URLs, fotos ni animaciones. Enviando mensaje de error.');
-    await bot.sendMessage(chatId, '📩 Por favor, envía al menos un enlace, foto o GIF. Ejemplo: /boton https://ejemplo.com https://otro.com');
+  if (!urls.length && !photo && !video && !animation) {
+    console.log('No se encontraron URLs, fotos, videos ni animaciones. Enviando mensaje de error.');
+    await bot.sendMessage(chatId, '📩 Por favor, envía al menos un enlace, foto, video o GIF. Ejemplo: /boton https://ejemplo.com');
     return;
   }
 
@@ -137,37 +166,14 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
   const loadingMsg = await bot.sendMessage(chatId, '⏳ Generando tu publicación...');
   console.log(`Mensaje de carga enviado: ${loadingMsg.message_id}`);
 
-  // Determinar título y descripción
-  let titles = [];
-  let descriptions = [];
-  let imageUrl = null;
-
-  if (urls.length) {
-    console.log(`Procesando ${urls.length} enlaces...`);
-    // Analizar cada enlace
-    for (const url of urls) {
-      const { title, description, image } = await analyzeLink(url);
-      titles.push(title);
-      descriptions.push(description);
-      if (image && !imageUrl) imageUrl = image; // Usar la primera imagen encontrada
-    }
-    console.log('Enlaces procesados:', titles);
-  } else {
-    titles = [captionText];
-    descriptions = ['Contenido multimedia'];
-    console.log('No hay enlaces, usando captionText:', captionText);
-  }
-
-  // Formatear el mensaje en HTML
-  let caption = '📢 ';
-  if (urls.length) {
-    // Si hay múltiples enlaces, enumerarlos
-    titles.forEach((title, index) => {
-      caption += `<b>Enlace ${index + 1}: ${title}</b>\n${descriptions[index]}\n`;
+  // Estructurar el mensaje
+  const { formattedText } = structureMessage(text, urls);
+  let caption = formattedText;
+  if (!caption) {
+    caption = '📢 Publicación\n';
+    urls.forEach((url, index) => {
+      caption += `Enlace ${index + 1}: Visita este enlace\n(enlace ${index + 1})\n`;
     });
-  } else {
-    // Si no hay enlaces, usar el título y descripción por defecto
-    caption += `<b>${titles[0]}</b>\n${descriptions[0]}\n`;
   }
   caption += `\n${SIGNATURE}`;
   console.log('Caption generado:', caption);
@@ -176,24 +182,16 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
     let sentMessage;
     console.log('Enviando mensaje final...');
     // Caso 1: Solo enlaces (sin multimedia adjunto)
-    if (urls.length && !photo && !animation) {
+    if (urls.length && !photo && !video && !animation) {
       console.log('Caso 1: Solo enlaces');
-      if (imageUrl) {
-        sentMessage = await bot.sendPhoto(chatId, imageUrl, {
-          caption,
-          parse_mode: 'HTML',
-          reply_markup: createButtons(urls, loadingMsg.message_id),
-        });
-      } else {
-        sentMessage = await bot.sendMessage(chatId, caption, {
-          parse_mode: 'HTML',
-          reply_markup: createButtons(urls, loadingMsg.message_id),
-        });
-      }
+      sentMessage = await bot.sendMessage(chatId, caption, {
+        parse_mode: 'HTML',
+        reply_markup: createButtons(urls, loadingMsg.message_id),
+      });
       await bot.deleteMessage(chatId, loadingMsg.message_id);
     }
     // Caso 2: Solo foto (sin enlaces)
-    else if (photo && !urls.length && !animation) {
+    else if (photo && !urls.length && !video && !animation) {
       console.log('Caso 2: Solo foto');
       sentMessage = await bot.sendPhoto(chatId, photo, {
         caption,
@@ -202,9 +200,19 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
       });
       await bot.deleteMessage(chatId, loadingMsg.message_id);
     }
-    // Caso 3: Solo GIF (sin enlaces)
-    else if (animation && !urls.length && !photo) {
-      console.log('Caso 3: Solo GIF');
+    // Caso 3: Solo video (sin enlaces)
+    else if (video && !urls.length && !photo && !animation) {
+      console.log('Caso 3: Solo video');
+      sentMessage = await bot.sendVideo(chatId, video, {
+        caption,
+        parse_mode: 'HTML',
+        reply_markup: createButtons(urls, loadingMsg.message_id),
+      });
+      await bot.deleteMessage(chatId, loadingMsg.message_id);
+    }
+    // Caso 4: Solo GIF (sin enlaces)
+    else if (animation && !urls.length && !photo && !video) {
+      console.log('Caso 4: Solo GIF');
       sentMessage = await bot.sendAnimation(chatId, animation, {
         caption,
         parse_mode: 'HTML',
@@ -212,9 +220,9 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
       });
       await bot.deleteMessage(chatId, loadingMsg.message_id);
     }
-    // Caso 4: Enlaces + Foto
-    else if (urls.length && photo && !animation) {
-      console.log('Caso 4: Enlaces + Foto');
+    // Caso 5: Enlaces + Foto
+    else if (urls.length && photo && !video && !animation) {
+      console.log('Caso 5: Enlaces + Foto');
       sentMessage = await bot.sendPhoto(chatId, photo, {
         caption,
         parse_mode: 'HTML',
@@ -222,9 +230,19 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
       });
       await bot.deleteMessage(chatId, loadingMsg.message_id);
     }
-    // Caso 5: Enlaces + GIF
-    else if (urls.length && animation && !photo) {
-      console.log('Caso 5: Enlaces + GIF');
+    // Caso 6: Enlaces + Video
+    else if (urls.length && video && !photo && !animation) {
+      console.log('Caso 6: Enlaces + Video');
+      sentMessage = await bot.sendVideo(chatId, video, {
+        caption,
+        parse_mode: 'HTML',
+        reply_markup: createButtons(urls, loadingMsg.message_id),
+      });
+      await bot.deleteMessage(chatId, loadingMsg.message_id);
+    }
+    // Caso 7: Enlaces + GIF
+    else if (urls.length && animation && !photo && !video) {
+      console.log('Caso 7: Enlaces + GIF');
       sentMessage = await bot.sendAnimation(chatId, animation, {
         caption,
         parse_mode: 'HTML',
@@ -232,10 +250,10 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
       });
       await bot.deleteMessage(chatId, loadingMsg.message_id);
     }
-    // Caso 6: Combinaciones no soportadas
+    // Caso 8: Combinaciones no soportadas
     else {
-      console.log('Caso 6: Combinación no soportada');
-      await bot.editMessageText('⚠️ Combinación no soportada. Usa enlaces, foto o GIF por separado o con enlaces.', {
+      console.log('Caso 8: Combinación no soportada');
+      await bot.editMessageText('⚠️ Combinación no soportada. Usa enlaces con solo un tipo de multimedia (foto, video o GIF).', {
         chat_id: chatId,
         message_id: loadingMsg.message_id,
         parse_mode: 'HTML',
