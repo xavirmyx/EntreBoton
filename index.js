@@ -16,6 +16,9 @@ const SIGNATURE = '✨ EntresHijos ✨';
 const PORT = process.env.PORT || 8443;
 const WEBHOOK_URL = 'https://entreboton.onrender.com/webhook';
 
+// Almacenamiento de registros de clics (en memoria, para este ejemplo)
+const clickRecords = [];
+
 // Crear el bot con opciones para webhook
 const bot = new TelegramBot(TOKEN, { polling: false });
 
@@ -29,7 +32,6 @@ function sanitizeText(text) {
   // Reemplazar caracteres problemáticos y asegurarse de que el texto sea seguro para HTML
   return text
     .replace(/[\r\n]+/g, ' ') // Reemplazar saltos de línea por espacios
-    .replace(/[^\x20-\x7E]+/g, '') // Eliminar caracteres no ASCII (excepto los básicos)
     .replace(/[<>&'"]/g, (char) => {
       // Escapar caracteres especiales para HTML
       switch (char) {
@@ -72,14 +74,16 @@ async function analyzeLink(url) {
 }
 
 // Función para generar botones inline para múltiples enlaces
-function createButtons(urls) {
+function createButtons(urls, messageId) {
   const keyboard = [];
-  // Añadir un botón para cada enlace
+  // Añadir un botón para cada enlace con un callback_data único
   urls.forEach((url, index) => {
-    keyboard.push([{ text: `🔗 Enlace ${index + 1}`, url }]);
+    keyboard.push([{
+      text: `🔗 Enlace ${index + 1}`,
+      callback_data: `click_${messageId}_${index}`,
+      url: url
+    }]);
   });
-  // Añadir botón de compartir
-  keyboard.push([{ text: '📲 Compartir', switch_inline_query: '' }]);
   return { inline_keyboard: keyboard };
 }
 
@@ -115,6 +119,7 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
   let imageUrl = null;
 
   if (urls.length) {
+    console.log(`Procesando ${urls.length} enlaces:`, urls);
     // Analizar cada enlace
     for (const url of urls) {
       const { title, description, image } = await analyzeLink(url);
@@ -140,58 +145,57 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
   }
   caption += `\n${SIGNATURE}`;
 
-  const replyMarkup = createButtons(urls);
-
   try {
+    let sentMessage;
     // Caso 1: Solo enlaces (sin multimedia adjunto)
     if (urls.length && !photo && !animation) {
       if (imageUrl) {
-        await bot.sendPhoto(chatId, imageUrl, {
+        sentMessage = await bot.sendPhoto(chatId, imageUrl, {
           caption,
-          parse_mode: 'HTML', // Cambiar a HTML para evitar problemas con Markdown
-          reply_markup: replyMarkup,
+          parse_mode: 'HTML',
+          reply_markup: createButtons(urls, loadingMsg.message_id),
         });
       } else {
-        await bot.sendMessage(chatId, caption, {
+        sentMessage = await bot.sendMessage(chatId, caption, {
           parse_mode: 'HTML',
-          reply_markup: replyMarkup,
+          reply_markup: createButtons(urls, loadingMsg.message_id),
         });
       }
       await bot.deleteMessage(chatId, loadingMsg.message_id);
     }
     // Caso 2: Solo foto (sin enlaces)
     else if (photo && !urls.length && !animation) {
-      await bot.sendPhoto(chatId, photo, {
+      sentMessage = await bot.sendPhoto(chatId, photo, {
         caption,
         parse_mode: 'HTML',
-        reply_markup: replyMarkup,
+        reply_markup: createButtons(urls, loadingMsg.message_id),
       });
       await bot.deleteMessage(chatId, loadingMsg.message_id);
     }
     // Caso 3: Solo GIF (sin enlaces)
     else if (animation && !urls.length && !photo) {
-      await bot.sendAnimation(chatId, animation, {
+      sentMessage = await bot.sendAnimation(chatId, animation, {
         caption,
         parse_mode: 'HTML',
-        reply_markup: replyMarkup,
+        reply_markup: createButtons(urls, loadingMsg.message_id),
       });
       await bot.deleteMessage(chatId, loadingMsg.message_id);
     }
     // Caso 4: Enlaces + Foto
     else if (urls.length && photo && !animation) {
-      await bot.sendPhoto(chatId, photo, {
+      sentMessage = await bot.sendPhoto(chatId, photo, {
         caption,
         parse_mode: 'HTML',
-        reply_markup: replyMarkup,
+        reply_markup: createButtons(urls, loadingMsg.message_id),
       });
       await bot.deleteMessage(chatId, loadingMsg.message_id);
     }
     // Caso 5: Enlaces + GIF
     else if (urls.length && animation && !photo) {
-      await bot.sendAnimation(chatId, animation, {
+      sentMessage = await bot.sendAnimation(chatId, animation, {
         caption,
         parse_mode: 'HTML',
-        reply_markup: replyMarkup,
+        reply_markup: createButtons(urls, loadingMsg.message_id),
       });
       await bot.deleteMessage(chatId, loadingMsg.message_id);
     }
@@ -202,7 +206,15 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
         message_id: loadingMsg.message_id,
         parse_mode: 'HTML',
       });
+      return;
     }
+
+    // Actualizar los botones con el message_id del mensaje enviado
+    await bot.editMessageReplyMarkup(createButtons(urls, sentMessage.message_id), {
+      chat_id: chatId,
+      message_id: sentMessage.message_id,
+    });
+
   } catch (error) {
     console.error(`Error al procesar el comando /boton: ${error.message}`);
     await bot.editMessageText('⚠️ Ocurrió un error al generar la publicación.', {
@@ -211,6 +223,62 @@ bot.onText(/\/boton(?:\s+(.+))?/, async (msg, match) => {
       parse_mode: 'HTML',
     });
   }
+});
+
+// Manejar clics en los botones
+bot.on('callback_query', async (query) => {
+  const chatId = query.message.chat.id;
+  const messageId = query.message.message_id;
+  const user = query.from;
+  const data = query.data;
+
+  if (data.startsWith('click_')) {
+    const [, , linkIndex] = data.split('_');
+    const timestamp = new Date().toISOString();
+
+    // Registrar el clic
+    clickRecords.push({
+      chatId,
+      messageId,
+      linkIndex: parseInt(linkIndex) + 1,
+      user: {
+        id: user.id,
+        first_name: user.first_name,
+        username: user.username,
+      },
+      timestamp,
+    });
+
+    console.log(`Clic registrado: ${JSON.stringify(clickRecords[clickRecords.length - 1])}`);
+
+    // Responder al usuario (opcional, para confirmar el clic)
+    await bot.answerCallbackQuery(query.id, { text: `Has pulsado el Enlace ${parseInt(linkIndex) + 1}` });
+  }
+});
+
+// Comando /visto
+bot.onText(/\/visto/, async (msg) => {
+  const chatId = msg.chat.id;
+
+  // Filtrar registros para este chat
+  const records = clickRecords.filter(record => record.chatId === chatId);
+
+  if (records.length === 0) {
+    await bot.sendMessage(chatId, '📊 No hay registros de clics en este chat.');
+    return;
+  }
+
+  // Formatear los registros
+  let response = '<b>📊 Registros de clics:</b>\n\n';
+  records.forEach(record => {
+    const userName = record.user.username ? `@${record.user.username}` : record.user.first_name;
+    response += `<b>Mensaje ID:</b> ${record.messageId}\n`;
+    response += `<b>Enlace:</b> ${record.linkIndex}\n`;
+    response += `<b>Usuario:</b> ${userName}\n`;
+    response += `<b>Hora:</b> ${new Date(record.timestamp).toLocaleString('es-ES')}\n\n`;
+  });
+
+  await bot.sendMessage(chatId, response, { parse_mode: 'HTML' });
 });
 
 // Configurar el webhook
