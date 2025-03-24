@@ -1,358 +1,242 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
+const { createClient } = require('@supabase/supabase-js');
+const shortid = require('shortid');
 
-// Configurar logging
+// Configuración de logging
 console.log('🚀 Iniciando el bot EntresHijos...');
 
-// Token del bot
+// Token del bot (sustituye con el tuyo real si es diferente)
 const TOKEN = '7624808452:AAHffFqqhaXtun4XthusBfeeeVDcp6Qsrs4';
 
-// Firma con emojis (permanente en todos los mensajes)
+// Firma y advertencia permanente
 const SIGNATURE = '\n\n✨ EntresHijos ✨';
+const WARNING_MESSAGE = '\n⚠️ Contenido exclusivo. Prohibido compartir o copiar.';
 
-// Advertencia para no compartir
-const WARNING_MESSAGE = '\n⚠️ Este mensaje es exclusivo para este grupo. No lo compartas para proteger el contenido.';
-
-// Configuración del servidor webhook
+// Configuración del webhook
 const PORT = process.env.PORT || 8443;
 const WEBHOOK_URL = 'https://entreboton.onrender.com/webhook';
+const REDIRECT_BASE_URL = 'https://entreboton.onrender.com/redirect/';
 
-// Almacenamiento de registros de interacciones (en memoria, para este ejemplo)
-const interactionRecords = [];
+// Configuración de Supabase
+const SUPABASE_URL = 'https://ycvkdxzxrzuwnkybmjwf.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4cnp1d25reWJtandmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDI4Mjg4NzYsImV4cCI6MjA1ODQwNDg3Nn0.1ts8XIpysbMe5heIg3oWLfqKxReusZxemw4lk2WZ4GI';
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// Almacenamiento de los chat_id originales de los mensajes (para verificar si se reenvían)
-const messageOrigins = new Map(); // Mapa para almacenar message_id -> { chat_id, message_text }
+// Mapa para almacenar orígenes de mensajes
+const messageOrigins = new Map();
 
-// Crear el bot con opciones para webhook
+// Crear el bot con webhook
 const bot = new TelegramBot(TOKEN, { polling: false });
 
 // Crear el servidor Express
 const app = express();
 app.use(express.json());
 
-// Función para sanitizar texto (eliminar caracteres problemáticos)
+// **Función para inicializar las tablas en Supabase**
+async function initializeTables() {
+  console.log('🛠️ Verificando y creando tablas en Supabase...');
+
+  // SQL para crear la tabla `interactions`
+  const interactionsTableSQL = `
+    CREATE TABLE IF NOT EXISTS interactions (
+      id uuid DEFAULT uuid_generate_v4() PRIMARY KEY,
+      type text NOT NULL,
+      chat_id text NOT NULL,
+      message_id integer NOT NULL,
+      user_id text NOT NULL,
+      username text,
+      timestamp timestamp DEFAULT now() NOT NULL,
+      details text
+    );
+  `;
+
+  // SQL para crear la tabla `short_links`
+  const shortLinksTableSQL = `
+    CREATE TABLE IF NOT EXISTS short_links (
+      id text PRIMARY KEY,
+      original_url text NOT NULL,
+      message_id integer NOT NULL,
+      chat_id text NOT NULL,
+      created_at timestamp DEFAULT now()
+    );
+  `;
+
+  try {
+    // Nota: Esto requiere permisos de administrador en Supabase. Si el cliente anónimo no tiene permisos,
+    // ejecuta estos comandos manualmente en el panel de SQL de Supabase.
+    const { error: interactionsError } = await supabase.rpc('execute_sql', { sql: interactionsTableSQL });
+    if (interactionsError) throw new Error(`Error creando tabla interactions: ${interactionsError.message}`);
+
+    const { error: shortLinksError } = await supabase.rpc('execute_sql', { sql: shortLinksTableSQL });
+    if (shortLinksError) throw new Error(`Error creando tabla short_links: ${shortLinksError.message}`);
+
+    console.log('✅ Tablas creadas o verificadas exitosamente.');
+  } catch (error) {
+    console.error(`❌ Error al inicializar tablas: ${error.message}`);
+    console.warn('⚠️ Por favor, ejecuta el SQL manualmente en el panel de Supabase con permisos de administrador.');
+  }
+}
+
+// **Sanitizar texto**
 function sanitizeText(text) {
   if (!text) return '';
-  return text
-    .replace(/[\r\n]+/g, '\n') // Mantener saltos de línea
-    .replace(/[<>&'"]/g, (char) => {
-      switch (char) {
-        case '<': return '&lt;';
-        case '>': return '&gt;';
-        case '&': return '&amp;';
-        case "'": return '&apos;';
-        case '"': return '&quot;';
-        default: return char;
-      }
-    })
-    .trim();
+  return text.replace(/[<>&'"]/g, char => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&#39;', '"': '&quot;' }[char] || char)).trim();
 }
 
-// Función para extraer todos los enlaces del texto
+// **Extraer URLs**
 function extractUrls(msg) {
   const text = msg.text || msg.caption || '';
-  console.log('📝 Texto para extraer URLs:', text);
-
-  // Método 1: Usar expresión regular
   const urlRegex = /(https?:\/\/[^\s]+)/g;
   let urls = text.match(urlRegex) || [];
-  console.log('🔗 URLs extraídas con regex:', urls);
-
-  // Método 2: Usar entidades de Telegram como respaldo
   const entities = msg.entities || msg.caption_entities || [];
-  const entityUrls = entities
-    .filter(entity => entity.type === 'url')
-    .map(entity => text.substr(entity.offset, entity.length));
-  console.log('🔗 URLs extraídas de entidades:', entityUrls);
-
-  // Combinar URLs de ambos métodos y eliminar duplicados
-  urls = [...new Set([...urls, ...entityUrls])];
-  console.log(`🔗 Enlaces extraídos (total): ${urls.length}`, urls);
-
-  return urls;
+  const entityUrls = entities.filter(e => e.type === 'url').map(e => text.substr(e.offset, e.length));
+  return [...new Set([...urls, ...entityUrls])];
 }
 
-// Función para estructurar el mensaje con los enlaces
-function structureMessage(text, urls) {
-  if (!text) return { formattedText: '', urlPositions: [] };
-
-  const lines = text.split('\n');
-  let formattedText = '';
-  let urlPositions = [];
-  let urlIndex = 0;
-
-  for (let line of lines) {
-    // Buscar si la línea contiene un enlace
-    const urlInLine = urls.find(url => line.includes(url));
-    if (urlInLine) {
-      // Guardar la posición del enlace
-      urlPositions.push({ url: urlInLine, lineIndex: lines.indexOf(line) });
-      // Reemplazar el enlace con un enlace clickable
-      line = line.replace(urlInLine, `<a href="${urlInLine}">🔗 Enlace ${urlIndex + 1}</a>`);
-      urlIndex++;
-    }
-    formattedText += line + '\n';
+// **Acortar URL y almacenar en Supabase**
+async function shortenUrl(originalUrl, messageId, chatId) {
+  const shortId = shortid.generate();
+  const { error } = await supabase.from('short_links').insert([{ id: shortId, original_url: originalUrl, message_id: messageId, chat_id: chatId }]);
+  if (error) {
+    console.error(`❌ Error al guardar enlace acortado: ${error.message}`);
+    return null;
   }
-
-  return { formattedText: formattedText.trim(), urlPositions };
+  return `${REDIRECT_BASE_URL}${shortId}`;
 }
 
-// Procesar todos los mensajes automáticamente
+// **Estructurar mensaje con enlaces acortados**
+async function structureMessage(text, urls, messageId, chatId) {
+  if (!text) return { formattedText: '', urlPositions: [] };
+  let formattedText = text;
+  const urlPositions = [];
+  for (let i = 0; i < urls.length; i++) {
+    const shortUrl = await shortenUrl(urls[i], messageId, chatId);
+    if (shortUrl) {
+      formattedText = formattedText.replace(urls[i], `<a href="${shortUrl}">🔗 Enlace ${i + 1}</a>`);
+      urlPositions.push({ url: urls[i], shortUrl });
+    }
+  }
+  return { formattedText, urlPositions };
+}
+
+// **Procesar mensajes**
 bot.on('message', async (msg) => {
-  console.log('📩 Mensaje recibido:', JSON.stringify(msg, null, 2));
   const chatId = msg.chat.id;
-  const text = msg.text || msg.caption || '';
-  const urls = extractUrls(msg); // Extraer todos los enlaces
+  const text = sanitizeText(msg.text || msg.caption);
+  const urls = extractUrls(msg);
   const photo = msg.photo ? msg.photo[msg.photo.length - 1].file_id : null;
   const video = msg.video ? msg.video.file_id : null;
   const animation = msg.animation ? msg.animation.file_id : null;
 
-  console.log(`🔗 URLs encontradas: ${urls.length}, 📷 Foto: ${!!photo}, 🎥 Video: ${!!video}, 🎞️ Animación: ${!!animation}`);
+  if (msg.text && msg.text.startsWith('/')) return; // Ignorar comandos
+  if (!urls.length && !photo && !video && !animation) return;
 
-  // Ignorar mensajes que sean comandos (excepto /visto, que se maneja por separado)
-  if (msg.text && msg.text.startsWith('/')) {
-    return; // Saltar comandos
-  }
-
-  // Si no hay contenido válido, ignorar el mensaje
-  if (!urls.length && !photo && !video && !animation) {
-    console.log('❌ No se encontraron URLs, fotos, videos ni animaciones. Ignorando mensaje.');
-    return;
-  }
-
-  // Enviar mensaje de carga
-  console.log('⏳ Enviando mensaje de carga...');
-  let loadingMsg;
-  try {
-    loadingMsg = await bot.sendMessage(chatId, '⏳ Generando tu publicación...');
-    console.log(`✅ Mensaje de carga enviado: ${loadingMsg.message_id}`);
-  } catch (error) {
-    console.error(`❌ Error al enviar mensaje de carga: ${error.message}`);
-    return;
-  }
-
-  // Estructurar el mensaje
-  const { formattedText } = structureMessage(text, urls);
-  let caption = formattedText;
-  if (!caption) {
-    caption = '📢 Publicación\n';
-    urls.forEach((url, index) => {
-      caption += `<a href="${url}">🔗 Enlace ${index + 1}</a>\n`;
-    });
-  }
-  caption += `${SIGNATURE}${WARNING_MESSAGE}`; // Añadir la firma y la advertencia
-  console.log('📝 Caption generado:', caption);
+  const loadingMsg = await bot.sendMessage(chatId, '⏳ Generando publicación...');
+  const { formattedText } = await structureMessage(text, urls, loadingMsg.message_id, chatId);
+  let caption = formattedText || '📢 Publicación';
+  caption += `${SIGNATURE}${WARNING_MESSAGE}`;
 
   try {
-    console.log('📤 Enviando mensaje final...');
     let sentMessage;
-    // Caso 1: Solo enlaces (sin multimedia adjunto)
     if (urls.length && !photo && !video && !animation) {
-      console.log('📜 Caso 1: Solo enlaces');
-      sentMessage = await bot.editMessageText(caption, {
-        chat_id: chatId,
-        message_id: loadingMsg.message_id,
-        parse_mode: 'HTML',
-        disable_web_page_preview: true,
-        protect_content: true, // Desactivar el reenvío (requiere permisos de administrador)
-      });
-    }
-    // Caso 2: Solo foto (sin enlaces)
-    else if (photo && !urls.length && !video && !animation) {
-      console.log('📷 Caso 2: Solo foto');
+      sentMessage = await bot.editMessageText(caption, { chat_id: chatId, message_id: loadingMsg.message_id, parse_mode: 'HTML', disable_web_page_preview: true, protect_content: true });
+    } else if (photo && !urls.length) {
       await bot.deleteMessage(chatId, loadingMsg.message_id);
-      sentMessage = await bot.sendPhoto(chatId, photo, {
-        caption,
-        parse_mode: 'HTML',
-        disable_web_page_preview: true,
-        protect_content: true,
-      });
-    }
-    // Caso 3: Solo video (sin enlaces)
-    else if (video && !urls.length && !photo && !animation) {
-      console.log('🎥 Caso 3: Solo video');
+      sentMessage = await bot.sendPhoto(chatId, photo, { caption, parse_mode: 'HTML', protect_content: true });
+    } else if (video && !urls.length) {
       await bot.deleteMessage(chatId, loadingMsg.message_id);
-      sentMessage = await bot.sendVideo(chatId, video, {
-        caption,
-        parse_mode: 'HTML',
-        disable_web_page_preview: true,
-        protect_content: true,
-      });
-    }
-    // Caso 4: Solo GIF (sin enlaces)
-    else if (animation && !urls.length && !photo && !video) {
-      console.log('🎞️ Caso 4: Solo GIF');
+      sentMessage = await bot.sendVideo(chatId, video, { caption, parse_mode: 'HTML', protect_content: true });
+    } else if (animation && !urls.length) {
       await bot.deleteMessage(chatId, loadingMsg.message_id);
-      sentMessage = await bot.sendAnimation(chatId, animation, {
-        caption,
-        parse_mode: 'HTML',
-        disable_web_page_preview: true,
-        protect_content: true,
-      });
-    }
-    // Caso 5: Enlaces + Foto
-    else if (urls.length && photo && !video && !animation) {
-      console.log('📷🔗 Caso 5: Enlaces + Foto');
-      await bot.deleteMessage(chatId, loadingMsg.message_id);
-      sentMessage = await bot.sendPhoto(chatId, photo, {
-        caption,
-        parse_mode: 'HTML',
-        disable_web_page_preview: true,
-        protect_content: true,
-      });
-    }
-    // Caso 6: Enlaces + Video
-    else if (urls.length && video && !photo && !animation) {
-      console.log('🎥🔗 Caso 6: Enlaces + Video');
-      await bot.deleteMessage(chatId, loadingMsg.message_id);
-      sentMessage = await bot.sendVideo(chatId, video, {
-        caption,
-        parse_mode: 'HTML',
-        disable_web_page_preview: true,
-        protect_content: true,
-      });
-    }
-    // Caso 7: Enlaces + GIF
-    else if (urls.length && animation && !photo && !video) {
-      console.log('🎞️🔗 Caso 7: Enlaces + GIF');
-      await bot.deleteMessage(chatId, loadingMsg.message_id);
-      sentMessage = await bot.sendAnimation(chatId, animation, {
-        caption,
-        parse_mode: 'HTML',
-        disable_web_page_preview: true,
-        protect_content: true,
-      });
-    }
-    // Caso 8: Combinaciones no soportadas
-    else {
-      console.log('❌ Caso 8: Combinación no soportada');
-      await bot.editMessageText('⚠️ Combinación no soportada. Usa enlaces con solo un tipo de multimedia (foto, video o GIF).', {
-        chat_id: chatId,
-        message_id: loadingMsg.message_id,
-        parse_mode: 'HTML',
-      });
+      sentMessage = await bot.sendAnimation(chatId, animation, { caption, parse_mode: 'HTML', protect_content: true });
+    } else {
+      await bot.editMessageText('⚠️ Usa solo un tipo de contenido (enlaces, foto, video o GIF).', { chat_id: chatId, message_id: loadingMsg.message_id, parse_mode: 'HTML' });
       return;
     }
-
-    // Guardar el origen del mensaje
     messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: caption });
-    console.log(`✅ Mensaje enviado y registrado: ${sentMessage.message_id}`);
-
   } catch (error) {
-    console.error(`❌ Error al procesar el mensaje: ${error.message}`);
-    await bot.editMessageText('⚠️ Ocurrió un error al generar la publicación.', {
-      chat_id: chatId,
-      message_id: loadingMsg.message_id,
-      parse_mode: 'HTML',
-    });
+    console.error(`❌ Error al procesar mensaje: ${error.message}`);
+    await bot.editMessageText('⚠️ Error al generar publicación.', { chat_id: chatId, message_id: loadingMsg.message_id, parse_mode: 'HTML' });
   }
 });
 
-// Detectar reenvíos de mensajes y proteger contra robo de contenido
+// **Detectar y manejar reenvíos**
 bot.on('message', async (msg) => {
-  // Verificar si el mensaje es un reenvío
-  if (msg.forward_from || msg.forward_from_chat || msg.forward_from_message_id) {
-    const forwardedMessageId = msg.forward_from_message_id;
-    const forwardedFromChatId = msg.forward_from_chat ? msg.forward_from_chat.id : null;
-    const forwardedByUser = msg.from;
+  if (!msg.forward_from && !msg.forward_from_chat && !msg.forward_from_message_id) return;
 
-    // Verificar si el mensaje reenviado es uno de los mensajes del bot
-    if (messageOrigins.has(forwardedMessageId)) {
-      const origin = messageOrigins.get(forwardedMessageId);
-      const originalChatId = origin.chat_id;
-      const originalMessageText = origin.message_text;
+  const forwardedMessageId = msg.forward_from_message_id;
+  const forwardedByUser = msg.from;
+  if (!messageOrigins.has(forwardedMessageId)) return;
 
-      // Enviar advertencia al grupo original
-      const userName = forwardedByUser.username ? `@${forwardedByUser.username}` : forwardedByUser.first_name;
-      const warningText = `🚨 !${userName} ha reenviado el mensaje!\n\n` +
-                        `📜 Mensaje reenviado:\n${originalMessageText.slice(0, 100)}...\n` +
-                        `📍 Reenviado a: ${msg.chat.title || msg.chat.id} (ID: ${msg.chat.id})`;
+  const origin = messageOrigins.get(forwardedMessageId);
+  const originalChatId = origin.chat_id;
+  const userName = forwardedByUser.username ? `@${forwardedByUser.username}` : forwardedByUser.first_name;
 
-      try {
-        await bot.sendMessage(originalChatId, warningText, { parse_mode: 'HTML' });
-        console.log(`✅ Advertencia de reenvío enviada al grupo original (${originalChatId})`);
-      } catch (error) {
-        console.error(`❌ Error al enviar advertencia de reenvío al grupo original: ${error.message}`);
-      }
+  // Advertencia en chat original
+  await bot.sendMessage(originalChatId, `🚨 ${userName} reenvió un mensaje exclusivo a ${msg.chat.title || msg.chat.id}!`, { parse_mode: 'HTML' });
 
-      // Enviar mensaje al usuario que reenvió (en el chat destino)
-      try {
-        await bot.sendMessage(msg.chat.id, `🚨 Este mensaje es exclusivo para el grupo original. Por favor, no lo compartas.`, {
-          parse_mode: 'HTML',
-        });
-        console.log(`✅ Advertencia enviada al usuario que reenvió (${forwardedByUser.id}) en el chat destino (${msg.chat.id})`);
-      } catch (error) {
-        console.error(`❌ Error al enviar advertencia al usuario que reenvió: ${error.message}`);
-      }
-
-      // Intentar eliminar el mensaje reenviado del chat destino (si el bot tiene permisos)
-      try {
-        await bot.deleteMessage(msg.chat.id, msg.message_id);
-        console.log(`✅ Mensaje reenviado eliminado del chat destino (${msg.chat.id})`);
-      } catch (error) {
-        console.error(`❌ Error al eliminar el mensaje reenviado del chat destino: ${error.message}`);
-      }
-
-      // Registrar la interacción
-      interactionRecords.push({
-        type: 'forward',
-        chatId: originalChatId,
-        messageId: forwardedMessageId,
-        user: {
-          id: forwardedByUser.id,
-          first_name: forwardedByUser.first_name,
-          username: forwardedByUser.username,
-        },
-        timestamp: new Date().toISOString(),
-      });
-    }
+  // Intentar eliminar mensaje reenviado
+  try {
+    await bot.deleteMessage(msg.chat.id, msg.message_id);
+    await bot.sendMessage(msg.chat.id, '🚫 Mensaje eliminado por compartir contenido exclusivo.', { parse_mode: 'HTML' });
+  } catch (error) {
+    console.error(`❌ No se pudo eliminar el mensaje: ${error.message}`);
   }
+
+  // Registrar en Supabase
+  const { error } = await supabase.from('interactions').insert([{
+    type: 'forward',
+    chat_id: originalChatId,
+    message_id: forwardedMessageId,
+    user_id: forwardedByUser.id,
+    username: userName,
+    timestamp: new Date().toISOString(),
+    details: `Reenviado a: ${msg.chat.id}`
+  }]);
+  if (error) console.error(`❌ Error al registrar reenvío: ${error.message}`);
 });
 
-// Comando /visto
+// **Manejar clics en enlaces**
+app.get('/redirect/:shortId', async (req, res) => {
+  const { data, error } = await supabase.from('short_links').select('*').eq('id', req.params.shortId).single();
+  if (error || !data) return res.status(404).send('Enlace no encontrado');
+
+  const { original_url, message_id, chat_id } = data;
+  await supabase.from('interactions').insert([{
+    type: 'click',
+    chat_id,
+    message_id,
+    user_id: 'unknown',
+    username: 'unknown',
+    timestamp: new Date().toISOString(),
+    details: `Clic en: ${original_url}`
+  }]);
+  res.redirect(original_url);
+});
+
+// **Comando /visto**
 bot.onText(/\/visto/, async (msg) => {
   const chatId = msg.chat.id;
+  const { data, error } = await supabase.from('interactions').select('*').eq('chat_id', chatId);
+  if (error) return bot.sendMessage(chatId, '⚠️ Error al obtener interacciones.');
 
-  // Filtrar registros para este chat
-  const records = interactionRecords.filter(record => record.chatId === chatId);
-
-  if (records.length === 0) {
-    await bot.sendMessage(chatId, '📊 No hay registros de interacciones en este chat. 🕵️‍♂️');
-    return;
-  }
-
-  // Formatear los registros
-  let response = '<b>📊 Registros de interacciones:</b>\n\n';
-  records.forEach(record => {
-    const userName = record.user.username ? `@${record.user.username}` : record.user.first_name;
-    response += `<b>📜 Mensaje ID:</b> ${record.messageId}\n`;
-    response += `<b>🚨 Acción:</b> ${record.type === 'forward' ? 'Reenvió el mensaje' : 'Interactuó con el mensaje'}\n`;
-    response += `<b>👤 Usuario:</b> ${userName}\n`;
-    response += `<b>⏰ Hora:</b> ${new Date(record.timestamp).toLocaleString('es-ES')}\n\n`;
+  if (!data.length) return bot.sendMessage(chatId, '📊 No hay interacciones registradas.');
+  let response = '<b>📊 Interacciones:</b>\n\n';
+  data.forEach(r => {
+    response += `<b>ID:</b> ${r.message_id}\n<b>Acción:</b> ${r.type}\n<b>Usuario:</b> ${r.username || 'Desconocido'}\n<b>Hora:</b> ${new Date(r.timestamp).toLocaleString('es-ES')}\n<b>Detalles:</b> ${r.details}\n\n`;
   });
-
   await bot.sendMessage(chatId, response, { parse_mode: 'HTML' });
 });
 
-// Configurar el webhook
-app.get('/', (req, res) => {
-  console.log('📥 Recibida solicitud GET en /');
-  res.send('This is a Telegram webhook server for EntresHijos. Please use POST requests for updates. 🚀');
-});
-
+// **Configurar webhook y arrancar**
 app.post('/webhook', (req, res) => {
-  console.log('📥 Recibida solicitud POST en /webhook:', JSON.stringify(req.body, null, 2));
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
 
-// Iniciar el servidor
 app.listen(PORT, async () => {
-  console.log(`✅ Servidor iniciado en el puerto ${PORT}`);
-  try {
-    await bot.setWebHook(WEBHOOK_URL);
-    console.log(`✅ Webhook configurado en ${WEBHOOK_URL}`);
-  } catch (error) {
-    console.error(`❌ Error al configurar el webhook: ${error.message}`);
-  }
+  console.log(`✅ Servidor en puerto ${PORT}`);
+  await bot.setWebHook(WEBHOOK_URL);
+  await initializeTables(); // Inicializar tablas al arrancar
 });
