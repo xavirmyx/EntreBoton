@@ -1,15 +1,15 @@
 {
-  "name": "nodejs",
+  "name": "entreboton",
   "version": "1.0.0",
-  "description": "",
+  "description": "Bot de Telegram para generar publicaciones con botones inline",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
-    "@types/node": "^22.13.11"
+    "node-telegram-bot-api": "^0.66.0",
+    "axios": "^1.7.7",
+    "cheerio": "^1.0.0-rc.12",
+    "express": "^4.21.0"
   }
 }
