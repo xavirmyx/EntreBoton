@@ -129,11 +129,10 @@ function splitMessage(text, maxLength = 4096) {
   return parts;
 }
 
-// **Estructurar mensaje con enlaces acortados**
+// **Estructurar mensaje con enlaces acortados (sin modificar el texto original)**
 async function structureMessage(text, urls, messageId, chatId, userId, username) {
   if (!text && !urls.length) return { formattedText: '', urlPositions: [], shortLinks: [] };
-  let formattedText = text || '';
-  const urlPositions = [];
+  const formattedText = text || ''; // Mantenemos el texto original sin modificaciones
   const shortLinks = [];
 
   console.log(`📝 Procesando ${urls.length} enlaces...`);
@@ -152,13 +151,11 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
   const results = (await Promise.all(shortLinksPromises)).filter(link => link !== null);
 
   for (const link of results) {
-    formattedText = formattedText.replace(link.url, `🔗 Enlace ${link.index + 1}`);
-    urlPositions.push({ index: link.index, url: link.url });
     shortLinks.push(link);
   }
 
-  console.log(`✅ ${results.length} enlaces acortados y reemplazados en el texto.`);
-  return { formattedText, urlPositions, shortLinks };
+  console.log(`✅ ${results.length} enlaces acortados.`);
+  return { formattedText, shortLinks };
 }
 
 // **Verificar si el usuario es administrador**
@@ -243,8 +240,9 @@ bot.on('message', async (msg) => {
     const messageParts = splitMessage(caption);
     let sentMessage;
 
+    // Crear botones inline genéricos para los enlaces
     const inlineKeyboard = shortLinks.map(link => [{
-      text: `🔗 Enlace ${link.index + 1}`,
+      text: '🔗 Abrir enlace',
       callback_data: link.callbackData
     }]);
 
@@ -357,8 +355,8 @@ bot.on('callback_query', async (query) => {
       show_alert: true,
     });
 
-    // Enviar un mensaje con el enlace acortado como botón inline
-    await bot.sendMessage(chatId, 'Haz clic para ver el contenido:', {
+    // Enviar un mensaje con el enlace acortado como botón inline y programar su eliminación
+    const redirectMessage = await bot.sendMessage(chatId, 'Haz clic para ver el contenido:', {
       reply_to_message_id: messageId,
       reply_markup: {
         inline_keyboard: [
@@ -371,6 +369,16 @@ bot.on('callback_query', async (query) => {
         ],
       },
     });
+
+    // Programar la eliminación del mensaje después de 15 segundos
+    setTimeout(async () => {
+      try {
+        await bot.deleteMessage(chatId, redirectMessage.message_id);
+        console.log(`✅ Mensaje "Haz clic para ver el contenido" eliminado después de 15 segundos.`);
+      } catch (error) {
+        console.error(`❌ Error al eliminar el mensaje de redirección: ${error.message}`);
+      }
+    }, 15 * 1000); // 15 segundos
   } catch (error) {
     console.error('Error al procesar el callback:', error);
     if (error.code === 'ETELEGRAM' && error.response?.body?.description?.includes('query is too old')) {
