@@ -22,6 +22,26 @@ const CUSTOM_PHRASES = [
   'EntresHijos, juntos por siempre',
   'EntresHijos, tu compañero fiel',
   'EntresHijos, conectando pasiones',
+  'EntresHijos, siempre a tu lado',
+  'EntresHijos, compartiendo momentos',
+  'EntresHijos, creando recuerdos',
+  'EntresHijos, uniendo corazones',
+  'EntresHijos, tu hogar digital',
+  'EntresHijos, juntos somos más',
+  'EntresHijos, apoyándote siempre',
+  'EntresHijos, celebrando la unión',
+  'EntresHijos, contigo en cada paso',
+  'EntresHijos, donde todo comienza',
+  'EntresHijos, un lazo eterno',
+  'EntresHijos, siempre en equipo',
+  'EntresHijos, vibrando juntos',
+  'EntresHijos, tu espacio seguro',
+  'EntresHijos, conectando sueños',
+  'EntresHijos, siempre presentes',
+  'EntresHijos, juntos brillamos',
+  'EntresHijos, uniendo generaciones',
+  'EntresHijos, contigo al infinito',
+  'EntresHijos, somos familia',
 ];
 
 // Configuración del servidor webhook
@@ -391,15 +411,15 @@ bot.on('callback_query', async (query) => {
       },
     });
 
-    // Programar la eliminación del mensaje después de 10 segundos
+    // Programar la eliminación del mensaje después de 30 segundos
     setTimeout(async () => {
       try {
         await bot.deleteMessage(chatId, redirectMessage.message_id);
-        console.log(`✅ Mensaje "Haz clic para ver el contenido" eliminado después de 10 segundos.`);
+        console.log(`✅ Mensaje "Haz clic para ver el contenido" eliminado después de 30 segundos.`);
       } catch (error) {
         console.error(`❌ Error al eliminar el mensaje de redirección: ${error.message}`);
       }
-    }, 10 * 1000); // 10 segundos
+    }, 30 * 1000); // 30 segundos
   } catch (error) {
     console.error('Error al procesar el callback:', error);
     if (error.code === 'ETELEGRAM' && error.response?.body?.description?.includes('query is too old')) {
