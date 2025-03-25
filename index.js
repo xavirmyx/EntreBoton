@@ -306,17 +306,27 @@ bot.on('message', async (msg) => {
 // **Manejar clics en botones inline**
 bot.on('callback_query', async (query) => {
   const callbackQueryId = query.id;
-  const shortCode = query.data;
+  const callbackData = query.data; // Formato: "click:shortId:token"
   const username = query.from.username || query.from.id;
   const chatId = query.message.chat.id;
   const messageId = query.message.message_id;
 
   try {
-    // Obtener el enlace original desde Supabase usando el shortCode
+    // Extraer el shortId del callbackData
+    const dataParts = callbackData.split(':');
+    if (dataParts.length !== 3 || dataParts[0] !== 'click') {
+      console.error(`❌ Formato de callbackData inválido: ${callbackData}`);
+      return bot.answerCallbackQuery(callbackQueryId, { text: 'Error: Formato de enlace inválido.' });
+    }
+
+    const shortId = dataParts[1]; // El shortId es la segunda parte (por ejemplo, "jAnWb6jY_K_LbI3IwXdIm")
+    const token = dataParts[2]; // El token es la tercera parte
+
+    // Obtener el enlace original desde Supabase usando el shortId
     const { data: linkData, error } = await supabase
-      .from('links')
+      .from('short_links')
       .select('original_url')
-      .eq('short_code', shortCode)
+      .eq('id', shortId) // Usamos 'id' porque es la columna que contiene el shortId en la tabla short_links
       .single();
 
     if (error || !linkData) {
@@ -327,15 +337,19 @@ bot.on('callback_query', async (query) => {
     const originalUrl = linkData.original_url;
 
     // Registrar el clic en Supabase
-    await supabase.from('clicks').insert({
-      short_code: shortCode,
+    const { error: clickError } = await supabase.from('clicks').insert({
+      short_code: shortId, // Guardamos solo el shortId
       username: username,
       clicked_at: new Date().toISOString(),
     });
 
+    if (clickError) {
+      console.error('Error al registrar el clic en Supabase:', clickError);
+    }
+
     // Generar un token único para la redirección
-    const token = require('crypto').randomBytes(16).toString('hex');
-    const redirectUrl = `https://entreboton.onrender.com/redirect/${shortCode}?token=${token}`;
+    const redirectToken = require('crypto').randomBytes(16).toString('hex');
+    const redirectUrl = `${REDIRECT_BASE_URL}${shortId}?token=${redirectToken}`;
 
     // Responder al callback sin usar el parámetro url
     await bot.answerCallbackQuery(callbackQueryId, {
@@ -359,7 +373,7 @@ bot.on('callback_query', async (query) => {
     });
   } catch (error) {
     console.error('Error al procesar el callback:', error);
-    if (error.code === 'ETELEGRAM' && error.response.body.description.includes('query is too old')) {
+    if (error.code === 'ETELEGRAM' && error.response?.body?.description?.includes('query is too old')) {
       // El callback es demasiado antiguo, podemos ignorarlo o notificar al usuario
       await bot.sendMessage(chatId, 'Lo siento, el enlace ha expirado. Por favor, intenta de nuevo.');
     } else {
