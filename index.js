@@ -319,7 +319,7 @@ bot.on('callback_query', async (query) => {
       return bot.answerCallbackQuery(callbackQueryId, { text: 'Error: Formato de enlace inválido.' });
     }
 
-    const shortId = dataParts[1]; // El shortId es la segunda parte (por ejemplo, "jAnWb6jY_K_LbI3IwXdIm")
+    const shortId = dataParts[1]; // El shortId es la segunda parte (por ejemplo, "Ea0OAKZO42dwpC_H7_08C")
     const token = dataParts[2]; // El token es la tercera parte
 
     // Obtener el enlace original desde Supabase usando el shortId
@@ -505,12 +505,48 @@ bot.onText(/\/banuser (\d+)/, async (msg, match) => {
   await bot.sendMessage(channel.chat_id, `🚫 El usuario con ID ${targetUserId} ha sido bloqueado y no podrá reenviar mensajes.`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
 });
 
-// **Configurar webhook y arrancar**
+// **Ruta para manejar el webhook de Telegram**
 app.post('/webhook', (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
 
+// **Ruta para manejar la redirección de enlaces acortados**
+app.get('/redirect/:shortId', async (req, res) => {
+  const { shortId } = req.params;
+  const { token } = req.query; // El token se pasa como query parameter (por ejemplo, ?token=someToken)
+
+  try {
+    // Buscar el enlace original en Supabase usando el shortId
+    const { data: linkData, error } = await supabase
+      .from('short_links')
+      .select('original_url, expires_at')
+      .eq('id', shortId)
+      .single();
+
+    if (error || !linkData) {
+      console.error(`❌ Error al obtener el enlace desde Supabase: ${error?.message || 'Enlace no encontrado'}`);
+      return res.status(404).send('Enlace no encontrado o expirado.');
+    }
+
+    // Verificar si el enlace ha expirado
+    const expiresAt = new Date(linkData.expires_at);
+    const now = new Date();
+    if (now > expiresAt) {
+      console.warn(`⚠️ Enlace expirado: ${shortId}`);
+      return res.status(410).send('El enlace ha expirado.');
+    }
+
+    // Redirigir al enlace original
+    console.log(`✅ Redirigiendo a: ${linkData.original_url}`);
+    res.redirect(linkData.original_url);
+  } catch (error) {
+    console.error(`❌ Error al procesar la redirección: ${error.message}`);
+    res.status(500).send('Error interno del servidor.');
+  }
+});
+
+// **Configurar webhook y arrancar**
 app.listen(PORT, async () => {
   console.log(`✅ Servidor en puerto ${PORT}`);
   await bot.setWebHook(WEBHOOK_URL);
