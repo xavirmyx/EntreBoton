@@ -23,7 +23,7 @@ const REDIRECT_BASE_URL = 'https://entreboton.onrender.com/redirect/';
 
 // Configuración de Supabase (usando variables de entorno)
 const SUPABASE_URL = 'https://ycvkdxzxrzuwnkybmjwf.supabase.co';
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4cnp1d25reWJtandmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDI4Mjg4NzYsImV4cCI6MjA1ODQwNDg3Nn0.1ts8XIpysbMe5heIg3oWLfqKxReusZxemw4lk2WZ4GI';
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4crp1d25reWJtandmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDI4Mjg4NzYsImV4cCI6MjA1ODQwNDg3Nn0.1ts8XIpysbMe5heIg3oWLfqKxReusZxemw4lk2WZ4GI';
 
 // Cliente de Supabase con permisos anónimos (para operaciones generales)
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -71,16 +71,17 @@ function extractUrls(msg) {
   return [...new Set([...urls, ...entityUrls])];
 }
 
-// **Generar token para autenticación**
+// **Generar token para autenticación (truncado a 32 caracteres)**
 function generateToken(userId, shortId, ipAddress) {
-  const secret = process.env.TOKEN_SECRET || 'tu-clave-secreta-aqui-32-caracteres'; // Usa una variable de entorno para mayor seguridad
-  return crypto.createHmac('sha256', secret).update(`${userId}-${shortId}-${ipAddress}`).digest('hex');
+  const secret = process.env.TOKEN_SECRET || 'tu-clave-secreta-aqui-32-caracteres';
+  const fullToken = crypto.createHmac('sha256', secret).update(`${userId}-${shortId}-${ipAddress}`).digest('hex');
+  return fullToken.substring(0, 32); // Truncar a 32 caracteres para cumplir con el límite de callback_data
 }
 
 // **Acortar URL y almacenar en Supabase**
 async function shortenUrl(originalUrl, messageId, chatId, userId, username, expiryHours = 24) {
   const shortId = shortid.generate();
-  const token = generateToken(userId, shortId, 'initial'); // Token inicial, se actualizará con la IP al hacer clic
+  const token = generateToken(userId, shortId, 'initial');
   const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString();
 
   const dataToInsert = {
@@ -91,10 +92,9 @@ async function shortenUrl(originalUrl, messageId, chatId, userId, username, expi
     user_id: userId,
     token,
     expires_at: expiresAt,
-    ip_address: null // Se actualizará al hacer clic
+    ip_address: null
   };
 
-  // Solo añadir el campo username si está definido
   if (username) {
     dataToInsert.username = username;
   }
@@ -132,18 +132,17 @@ function splitMessage(text, maxLength = 4096) {
 
 // **Estructurar mensaje con enlaces acortados**
 async function structureMessage(text, urls, messageId, chatId, userId, username) {
-  if (!text && !urls.length) return { formattedText: '', urlPositions: [] };
+  if (!text && !urls.length) return { formattedText: '', urlPositions: [], shortLinks: [] };
   let formattedText = text || '';
   const urlPositions = [];
+  const shortLinks = [];
 
   console.log(`📝 Procesando ${urls.length} enlaces...`);
 
-  // Procesar todos los enlaces en paralelo
   const shortLinksPromises = urls.map(async (url, i) => {
     const shortLink = await shortenUrl(url, messageId, chatId, userId, username);
     if (shortLink) {
       const { shortId, token } = shortLink;
-      // En lugar de usar el enlace directo, usaremos un enlace que apunte a un mensaje con un botón inline
       const callbackData = `click:${shortId}:${token}`;
       return { index: i, url, shortId, token, callbackData };
     }
@@ -151,15 +150,15 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
     return null;
   });
 
-  const shortLinks = (await Promise.all(shortLinksPromises)).filter(link => link !== null);
+  const results = (await Promise.all(shortLinksPromises)).filter(link => link !== null);
 
-  // Reemplazar los enlaces en el texto con placeholders para botones inline
-  for (const { url, index } of shortLinks) {
-    formattedText = formattedText.replace(url, `🔗 Enlace ${index + 1}`);
-    urlPositions.push({ index, url });
+  for (const link of results) {
+    formattedText = formattedText.replace(link.url, `🔗 Enlace ${link.index + 1}`);
+    urlPositions.push({ index: link.index, url: link.url });
+    shortLinks.push(link);
   }
 
-  console.log(`✅ ${shortLinks.length} enlaces acortados y reemplazados en el texto.`);
+  console.log(`✅ ${results.length} enlaces acortados y reemplazados en el texto.`);
   return { formattedText, urlPositions, shortLinks };
 }
 
@@ -179,8 +178,8 @@ bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id.toString();
   const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
 
-  if (!GRUPOS_PREDEFINIDOS[chatId]) return; // Ignorar si no es el grupo permitido
-  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return; // Ignorar si no es el canal específico
+  if (!GRUPOS_PREDEFINIDOS[chatId]) return;
+  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return;
 
   const channel = CANALES_ESPECIFICOS[chatId];
   const welcomeMessage = `
@@ -208,13 +207,12 @@ bot.on('message', async (msg) => {
   const chatId = msg.chat.id.toString();
   const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
 
-  if (!GRUPOS_PREDEFINIDOS[chatId]) return; // Ignorar si no es el grupo permitido
-  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return; // Ignorar si no es el canal específico
+  if (!GRUPOS_PREDEFINIDOS[chatId]) return;
+  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return;
 
   const userId = msg.from.id.toString();
   const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
 
-  // Verificar si el usuario está bloqueado
   if (bannedUsers.has(userId)) {
     const channel = CANALES_ESPECIFICOS[chatId];
     await bot.sendMessage(channel.chat_id, `🚫 Lo siento, ${username}, has sido bloqueado por compartir contenido exclusivo. Contacta a un administrador para resolver esto.`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
@@ -227,13 +225,12 @@ bot.on('message', async (msg) => {
   const video = msg.video ? msg.video.file_id : null;
   const animation = msg.animation ? msg.animation.file_id : null;
 
-  if (msg.text && msg.text.startsWith('/')) return; // Ignorar comandos
+  if (msg.text && msg.text.startsWith('/')) return;
   if (!urls.length && !photo && !video && !animation) return;
 
   const channel = CANALES_ESPECIFICOS[chatId];
   const loadingMsg = await bot.sendMessage(channel.chat_id, '⏳ Generando publicación...', { message_thread_id: channel.thread_id });
 
-  // Procesar enlaces si existen
   let caption = text || '📢 Publicación';
   let shortLinks = [];
   if (urls.length) {
@@ -244,19 +241,17 @@ bot.on('message', async (msg) => {
   caption += `${SIGNATURE}${WARNING_MESSAGE}`;
 
   try {
-    // Dividir el mensaje en partes si es necesario
     const messageParts = splitMessage(caption);
     let sentMessage;
 
-    // Crear botones inline para los enlaces
     const inlineKeyboard = shortLinks.map(link => [{
       text: `🔗 Enlace ${link.index + 1}`,
       callback_data: link.callbackData
     }]);
 
+    await bot.deleteMessage(channel.chat_id, loadingMsg.message_id, { message_thread_id: channel.thread_id });
+
     if (photo) {
-      await bot.deleteMessage(channel.chat_id, loadingMsg.message_id, { message_thread_id: channel.thread_id });
-      // Enviar la imagen con la primera parte de la descripción
       sentMessage = await bot.sendPhoto(channel.chat_id, photo, {
         caption: messageParts[0],
         message_thread_id: channel.thread_id,
@@ -264,12 +259,10 @@ bot.on('message', async (msg) => {
         protect_content: true,
         reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
       });
-      // Enviar las partes restantes como mensajes de texto
       for (let i = 1; i < messageParts.length; i++) {
         await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
       }
     } else if (video) {
-      await bot.deleteMessage(channel.chat_id, loadingMsg.message_id, { message_thread_id: channel.thread_id });
       sentMessage = await bot.sendVideo(channel.chat_id, video, {
         caption: messageParts[0],
         message_thread_id: channel.thread_id,
@@ -281,7 +274,6 @@ bot.on('message', async (msg) => {
         await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
       }
     } else if (animation) {
-      await bot.deleteMessage(channel.chat_id, loadingMsg.message_id, { message_thread_id: channel.thread_id });
       sentMessage = await bot.sendAnimation(channel.chat_id, animation, {
         caption: messageParts[0],
         message_thread_id: channel.thread_id,
@@ -293,8 +285,6 @@ bot.on('message', async (msg) => {
         await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
       }
     } else {
-      await bot.deleteMessage(channel.chat_id, loadingMsg.message_id, { message_thread_id: channel.thread_id });
-      // Enviar todas las partes como mensajes de texto
       sentMessage = await bot.sendMessage(channel.chat_id, messageParts[0], {
         message_thread_id: channel.thread_id,
         parse_mode: 'HTML',
@@ -310,7 +300,7 @@ bot.on('message', async (msg) => {
     stats.messagesProcessed++;
   } catch (error) {
     console.error(`❌ Error al procesar mensaje: ${error.message}`);
-    await bot.editMessageText('⚠️ Error al generar publicación.', { chat_id: channel.chat_id, message_id: loadingMsg.message_id, message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+    await bot.sendMessage(channel.chat_id, '⚠️ Error al generar publicación.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
   }
 });
 
@@ -325,11 +315,10 @@ bot.on('callback_query', async (callbackQuery) => {
   if (!data.startsWith('click:')) return;
 
   const [, shortId, token] = data.split(':');
-  const ipAddress = callbackQuery.from.is_bot ? 'bot' : 'unknown'; // No podemos obtener la IP real aquí, pero la registraremos en el redirect
+  const ipAddress = callbackQuery.from.is_bot ? 'bot' : 'unknown';
 
-  // Buscar el enlace acortado en Supabase
   const { data: linkData, error } = await supabase.from('short_links').select('*').eq('id', shortId).single();
-  if (error || !data) {
+  if (error || !linkData) {
     console.error(`❌ Error al buscar enlace acortado: ${error?.message || 'No encontrado'}`);
     await bot.answerCallbackQuery(callbackQuery.id, { text: 'Enlace no encontrado', show_alert: true });
     return;
@@ -342,20 +331,18 @@ bot.on('callback_query', async (callbackQuery) => {
     return;
   }
 
-  // Verificar token
   const expectedToken = generateToken(user_id, shortId, 'initial');
   if (token !== storedToken && token !== expectedToken) {
     await bot.answerCallbackQuery(callbackQuery.id, { text: 'Token inválido', show_alert: true });
     return;
   }
 
-  // Registrar el clic en Supabase con el @username del usuario que hizo clic
   const { error: insertError } = await supabase.from('interactions').insert([{
     type: 'click',
     chat_id: linkData.chat_id,
     message_id: linkData.message_id,
     user_id,
-    username, // Registrar el @username del usuario que hizo clic
+    username,
     timestamp: new Date().toISOString(),
     details: `Clic en: ${original_url}`
   }]);
@@ -365,7 +352,6 @@ bot.on('callback_query', async (callbackQuery) => {
     console.log(`✅ Clic registrado en Supabase: ${username} hizo clic en ${original_url}`);
   }
 
-  // Generar el enlace de redirección
   const redirectUrl = `${REDIRECT_BASE_URL}${shortId}?token=${token}`;
   await bot.answerCallbackQuery(callbackQuery.id, { url: redirectUrl });
 });
@@ -388,13 +374,11 @@ app.get('/redirect/:shortId', async (req, res) => {
     return res.status(403).send('Enlace expirado');
   }
 
-  // Verificar token
   const expectedToken = generateToken(user_id, shortId, ipAddress);
   if (token !== storedToken && token !== expectedToken) {
     return res.status(403).send('Token inválido');
   }
 
-  // Actualizar IP si es la primera vez (solo para auditoría, no para bloquear)
   if (!ip_address) {
     const { error: updateError } = await supabase.from('short_links').update({ ip_address: ipAddress }).eq('id', shortId);
     if (updateError) {
@@ -412,14 +396,13 @@ bot.on('message', async (msg) => {
   if (!msg.forward_from && !msg.forward_from_chat && !msg.forward_from_message_id) return;
 
   const chatId = msg.chat.id.toString();
-  if (!GRUPOS_PREDEFINIDOS[chatId]) return; // Ignorar si no es el grupo permitido
+  if (!GRUPOS_PREDEFINIDOS[chatId]) return;
 
   const forwardedMessageId = msg.forward_from_message_id;
   const forwardedByUser = msg.from;
   const userId = forwardedByUser.id.toString();
   const username = forwardedByUser.username ? `@${forwardedByUser.username}` : forwardedByUser.first_name;
 
-  // Verificar si el mensaje reenviado fue generado por el bot
   const forwardedFrom = msg.forward_from || msg.forward_from_chat;
   const isBotMessage = forwardedFrom && forwardedFrom.id === bot.id;
 
@@ -429,20 +412,16 @@ bot.on('message', async (msg) => {
   const originalChatId = origin.chat_id;
   const channel = CANALES_ESPECIFICOS[originalChatId];
 
-  // Incrementar contador de reenvíos del usuario
   const currentCount = (forwardCounts.get(userId) || 0) + 1;
   forwardCounts.set(userId, currentCount);
 
-  // Bloquear automáticamente si el usuario reenvía más de 3 veces
   if (currentCount > 3) {
     bannedUsers.add(userId);
     await bot.sendMessage(channel.chat_id, `🚫 ${username} ha sido bloqueado automáticamente por reenviar mensajes exclusivos repetidamente.`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
   }
 
-  // Advertencia en chat original
   await bot.sendMessage(channel.chat_id, `🚨 ${username} reenvió un mensaje exclusivo a ${msg.chat.title || msg.chat.id}!`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
 
-  // Intentar eliminar mensaje reenviado
   try {
     await bot.deleteMessage(msg.chat.id, msg.message_id);
     await bot.sendMessage(msg.chat.id, `🚫 Mensaje eliminado por compartir contenido exclusivo, ${username}.`, { parse_mode: 'HTML' });
@@ -450,7 +429,6 @@ bot.on('message', async (msg) => {
     console.error(`❌ No se pudo eliminar el mensaje: ${error.message}`);
   }
 
-  // Registrar en Supabase
   const { error } = await supabase.from('interactions').insert([{
     type: 'forward',
     chat_id: originalChatId,
@@ -473,8 +451,8 @@ bot.onText(/\/visto/, async (msg) => {
   const chatId = msg.chat.id.toString();
   const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
 
-  if (!GRUPOS_PREDEFINIDOS[chatId]) return; // Ignorar si no es el grupo permitido
-  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return; // Ignorar si no es el canal específico
+  if (!GRUPOS_PREDEFINIDOS[chatId]) return;
+  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return;
 
   const channel = CANALES_ESPECIFICOS[chatId];
   const { data, error } = await supabase.from('interactions').select('*').eq('chat_id', chatId);
@@ -496,8 +474,8 @@ bot.onText(/\/stats/, async (msg) => {
   const chatId = msg.chat.id.toString();
   const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
 
-  if (!GRUPOS_PREDEFINIDOS[chatId]) return; // Ignorar si no es el grupo permitido
-  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return; // Ignorar si no es el canal específico
+  if (!GRUPOS_PREDEFINIDOS[chatId]) return;
+  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return;
 
   const channel = CANALES_ESPECIFICOS[chatId];
   const statsMessage = `
@@ -518,14 +496,13 @@ bot.onText(/\/banuser (\d+)/, async (msg, match) => {
   const chatId = msg.chat.id.toString();
   const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
 
-  if (!GRUPOS_PREDEFINIDOS[chatId]) return; // Ignorar si no es el grupo permitido
-  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return; // Ignorar si no es el canal específico
+  if (!GRUPOS_PREDEFINIDOS[chatId]) return;
+  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return;
 
   const userId = msg.from.id;
   const targetUserId = match[1];
   const channel = CANALES_ESPECIFICOS[chatId];
 
-  // Verificar si el usuario es administrador
   const isUserAdmin = await isAdmin(chatId, userId);
   if (!isUserAdmin) {
     await bot.sendMessage(channel.chat_id, '🚫 Solo los administradores pueden usar este comando.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
