@@ -391,15 +391,15 @@ bot.on('callback_query', async (query) => {
       },
     });
 
-    // Programar la eliminación del mensaje después de 15 segundos
+    // Programar la eliminación del mensaje después de 10 segundos
     setTimeout(async () => {
       try {
         await bot.deleteMessage(chatId, redirectMessage.message_id);
-        console.log(`✅ Mensaje "Haz clic para ver el contenido" eliminado después de 15 segundos.`);
+        console.log(`✅ Mensaje "Haz clic para ver el contenido" eliminado después de 10 segundos.`);
       } catch (error) {
         console.error(`❌ Error al eliminar el mensaje de redirección: ${error.message}`);
       }
-    }, 15 * 1000); // 15 segundos
+    }, 10 * 1000); // 10 segundos
   } catch (error) {
     console.error('Error al procesar el callback:', error);
     if (error.code === 'ETELEGRAM' && error.response?.body?.description?.includes('query is too old')) {
