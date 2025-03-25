@@ -305,90 +305,69 @@ bot.on('message', async (msg) => {
 });
 
 // **Manejar clics en botones inline**
-bot.on('callback_query', async (callbackQuery) => {
-  const chatId = callbackQuery.message.chat.id.toString();
-  const messageId = callbackQuery.message.message_id;
-  const userId = callbackQuery.from.id.toString();
-  const username = callbackQuery.from.username ? `@${callbackQuery.from.username}` : callbackQuery.from.first_name;
-  const data = callbackQuery.data;
+bot.on('callback_query', async (query) => {
+  const callbackQueryId = query.id;
+  const shortCode = query.data;
+  const username = query.from.username || query.from.id;
+  const chatId = query.message.chat.id;
+  const messageId = query.message.message_id;
 
-  if (!data.startsWith('click:')) return;
+  try {
+    // Obtener el enlace original desde Supabase usando el shortCode
+    const { data: linkData, error } = await supabase
+      .from('links')
+      .select('original_url')
+      .eq('short_code', shortCode)
+      .single();
 
-  const [, shortId, token] = data.split(':');
-  const ipAddress = callbackQuery.from.is_bot ? 'bot' : 'unknown';
+    if (error || !linkData) {
+      console.error('Error al obtener el enlace desde Supabase:', error);
+      return bot.answerCallbackQuery(callbackQueryId, { text: 'Error al procesar el enlace.' });
+    }
 
-  const { data: linkData, error } = await supabase.from('short_links').select('*').eq('id', shortId).single();
-  if (error || !linkData) {
-    console.error(`❌ Error al buscar enlace acortado: ${error?.message || 'No encontrado'}`);
-    await bot.answerCallbackQuery(callbackQuery.id, { text: 'Enlace no encontrado', show_alert: true });
-    return;
-  }
+    const originalUrl = linkData.original_url;
 
-  const { original_url, user_id, token: storedToken, expires_at } = linkData;
+    // Registrar el clic en Supabase
+    await supabase.from('clicks').insert({
+      short_code: shortCode,
+      username: username,
+      clicked_at: new Date().toISOString(),
+    });
 
-  if (new Date() > new Date(expires_at)) {
-    await bot.answerCallbackQuery(callbackQuery.id, { text: 'Enlace expirado', show_alert: true });
-    return;
-  }
+    // Generar un token único para la redirección
+    const token = crypto.randomBytes(16).toString('hex');
+    const redirectUrl = `https://entreboton.onrender.com/redirect/${shortCode}?token=${token}`;
 
-  const expectedToken = generateToken(user_id, shortId, 'initial');
-  if (token !== storedToken && token !== expectedToken) {
-    await bot.answerCallbackQuery(callbackQuery.id, { text: 'Token inválido', show_alert: true });
-    return;
-  }
+    // Responder al callback sin usar el parámetro url
+    await bot.answerCallbackQuery(callbackQueryId, {
+      text: 'Enlace procesado. Haz clic en el botón para continuar.',
+      show_alert: true,
+    });
 
-  const { error: insertError } = await supabase.from('interactions').insert([{
-    type: 'click',
-    chat_id: linkData.chat_id,
-    message_id: linkData.message_id,
-    user_id,
-    username,
-    timestamp: new Date().toISOString(),
-    details: `Clic en: ${original_url}`
-  }]);
-  if (insertError) {
-    console.error(`❌ Error al registrar clic: ${insertError.message}`);
-  } else {
-    console.log(`✅ Clic registrado en Supabase: ${username} hizo clic en ${original_url}`);
-  }
-
-  const redirectUrl = `${REDIRECT_BASE_URL}${shortId}?token=${token}`;
-  await bot.answerCallbackQuery(callbackQuery.id, { url: redirectUrl });
-});
-
-// **Manejar clics en enlaces (redirección final)**
-app.get('/redirect/:shortId', async (req, res) => {
-  const { shortId } = req.params;
-  const { token } = req.query;
-  const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-
-  const { data, error } = await supabase.from('short_links').select('*').eq('id', shortId).single();
-  if (error || !data) {
-    console.error(`❌ Error al buscar enlace acortado: ${error?.message || 'No encontrado'}`);
-    return res.status(404).send('Enlace no encontrado');
-  }
-
-  const { original_url, user_id, token: storedToken, expires_at, ip_address } = data;
-
-  if (new Date() > new Date(expires_at)) {
-    return res.status(403).send('Enlace expirado');
-  }
-
-  const expectedToken = generateToken(user_id, shortId, ipAddress);
-  if (token !== storedToken && token !== expectedToken) {
-    return res.status(403).send('Token inválido');
-  }
-
-  if (!ip_address) {
-    const { error: updateError } = await supabase.from('short_links').update({ ip_address: ipAddress }).eq('id', shortId);
-    if (updateError) {
-      console.error(`❌ Error al actualizar IP en enlace acortado: ${updateError.message}`);
+    // Enviar un mensaje con el enlace acortado como botón inline
+    await bot.sendMessage(chatId, 'Haz clic para ver el contenido:', {
+      reply_to_message_id: messageId,
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text: 'Abrir enlace',
+              url: redirectUrl,
+            },
+          ],
+        ],
+      },
+    });
+  } catch (error) {
+    console.error('Error al procesar el callback:', error);
+    if (error.code === 'ETELEGRAM' && error.response.body.description.includes('query is too old')) {
+      // El callback es demasiado antiguo, podemos ignorarlo o notificar al usuario
+      await bot.sendMessage(chatId, 'Lo siento, el enlace ha expirado. Por favor, intenta de nuevo.');
     } else {
-      console.log(`✅ IP actualizada en enlace acortado: ${shortId}`);
+      // Otro tipo de error, notificar al usuario
+      await bot.sendMessage(chatId, 'Ocurrió un error al procesar el enlace. Por favor, intenta de nuevo.');
     }
   }
-
-  res.redirect(original_url);
 });
 
 // **Detectar y manejar reenvíos**
@@ -512,7 +491,7 @@ bot.onText(/\/banuser (\d+)/, async (msg, match) => {
   bannedUsers.add(targetUserId);
   await bot.sendMessage(channel.chat_id, `🚫 El usuario con ID ${targetUserId} ha sido bloqueado y no podrá reenviar mensajes.`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
 });
-
+await bot.sendMessage(channel.chat_id, `🚫 El usuario con ID ${targetUserId} ha sido bloqueado y no podrá reenviar mensajes.`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
 // **Configurar webhook y arrancar**
 app.post('/webhook', (req, res) => {
   bot.processUpdate(req.body);
