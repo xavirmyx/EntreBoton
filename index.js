@@ -143,8 +143,9 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
     const shortLink = await shortenUrl(url, messageId, chatId, userId, username);
     if (shortLink) {
       const { shortId, token } = shortLink;
-      const shortUrl = `${REDIRECT_BASE_URL}${shortId}?token=${token}`;
-      return { index: i, url, shortUrl };
+      // En lugar de usar el enlace directo, usaremos un enlace que apunte a un mensaje con un botón inline
+      const callbackData = `click:${shortId}:${token}`;
+      return { index: i, url, shortId, token, callbackData };
     }
     console.warn(`⚠️ No se pudo acortar el enlace: ${url}`);
     return null;
@@ -152,14 +153,14 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
 
   const shortLinks = (await Promise.all(shortLinksPromises)).filter(link => link !== null);
 
-  // Reemplazar los enlaces en el texto
-  for (const { url, shortUrl, index } of shortLinks) {
-    formattedText = formattedText.replace(url, `<a href="${shortUrl}">🔗 Enlace ${index + 1}</a>`);
-    urlPositions.push({ url, shortUrl });
+  // Reemplazar los enlaces en el texto con placeholders para botones inline
+  for (const { url, index } of shortLinks) {
+    formattedText = formattedText.replace(url, `🔗 Enlace ${index + 1}`);
+    urlPositions.push({ index, url });
   }
 
   console.log(`✅ ${shortLinks.length} enlaces acortados y reemplazados en el texto.`);
-  return { formattedText, urlPositions };
+  return { formattedText, urlPositions, shortLinks };
 }
 
 // **Verificar si el usuario es administrador**
@@ -234,9 +235,11 @@ bot.on('message', async (msg) => {
 
   // Procesar enlaces si existen
   let caption = text || '📢 Publicación';
+  let shortLinks = [];
   if (urls.length) {
-    const { formattedText } = await structureMessage(text, urls, loadingMsg.message_id, chatId, userId, username);
+    const { formattedText, shortLinks: links } = await structureMessage(text, urls, loadingMsg.message_id, chatId, userId, username);
     caption = formattedText || '📢 Publicación';
+    shortLinks = links;
   }
   caption += `${SIGNATURE}${WARNING_MESSAGE}`;
 
@@ -245,30 +248,60 @@ bot.on('message', async (msg) => {
     const messageParts = splitMessage(caption);
     let sentMessage;
 
+    // Crear botones inline para los enlaces
+    const inlineKeyboard = shortLinks.map(link => [{
+      text: `🔗 Enlace ${link.index + 1}`,
+      callback_data: link.callbackData
+    }]);
+
     if (photo) {
       await bot.deleteMessage(channel.chat_id, loadingMsg.message_id, { message_thread_id: channel.thread_id });
       // Enviar la imagen con la primera parte de la descripción
-      sentMessage = await bot.sendPhoto(channel.chat_id, photo, { caption: messageParts[0], message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
+      sentMessage = await bot.sendPhoto(channel.chat_id, photo, {
+        caption: messageParts[0],
+        message_thread_id: channel.thread_id,
+        parse_mode: 'HTML',
+        protect_content: true,
+        reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
+      });
       // Enviar las partes restantes como mensajes de texto
       for (let i = 1; i < messageParts.length; i++) {
         await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
       }
     } else if (video) {
       await bot.deleteMessage(channel.chat_id, loadingMsg.message_id, { message_thread_id: channel.thread_id });
-      sentMessage = await bot.sendVideo(channel.chat_id, video, { caption: messageParts[0], message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
+      sentMessage = await bot.sendVideo(channel.chat_id, video, {
+        caption: messageParts[0],
+        message_thread_id: channel.thread_id,
+        parse_mode: 'HTML',
+        protect_content: true,
+        reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
+      });
       for (let i = 1; i < messageParts.length; i++) {
         await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
       }
     } else if (animation) {
       await bot.deleteMessage(channel.chat_id, loadingMsg.message_id, { message_thread_id: channel.thread_id });
-      sentMessage = await bot.sendAnimation(channel.chat_id, animation, { caption: messageParts[0], message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
+      sentMessage = await bot.sendAnimation(channel.chat_id, animation, {
+        caption: messageParts[0],
+        message_thread_id: channel.thread_id,
+        parse_mode: 'HTML',
+        protect_content: true,
+        reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
+      });
       for (let i = 1; i < messageParts.length; i++) {
         await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
       }
     } else {
       await bot.deleteMessage(channel.chat_id, loadingMsg.message_id, { message_thread_id: channel.thread_id });
       // Enviar todas las partes como mensajes de texto
-      sentMessage = await bot.sendMessage(channel.chat_id, messageParts[0], { message_thread_id: channel.thread_id, parse_mode: 'HTML', disable_web_page_preview: true, protect_content: true });
+      sentMessage = await bot.sendMessage(channel.chat_id, messageParts[0], {
+        message_thread_id: channel.thread_id,
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+        protect_content: true,
+        reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
+      });
       for (let i = 1; i < messageParts.length; i++) {
         await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', disable_web_page_preview: true, protect_content: true });
       }
@@ -279,6 +312,99 @@ bot.on('message', async (msg) => {
     console.error(`❌ Error al procesar mensaje: ${error.message}`);
     await bot.editMessageText('⚠️ Error al generar publicación.', { chat_id: channel.chat_id, message_id: loadingMsg.message_id, message_thread_id: channel.thread_id, parse_mode: 'HTML' });
   }
+});
+
+// **Manejar clics en botones inline**
+bot.on('callback_query', async (callbackQuery) => {
+  const chatId = callbackQuery.message.chat.id.toString();
+  const messageId = callbackQuery.message.message_id;
+  const userId = callbackQuery.from.id.toString();
+  const username = callbackQuery.from.username ? `@${callbackQuery.from.username}` : callbackQuery.from.first_name;
+  const data = callbackQuery.data;
+
+  if (!data.startsWith('click:')) return;
+
+  const [, shortId, token] = data.split(':');
+  const ipAddress = callbackQuery.from.is_bot ? 'bot' : 'unknown'; // No podemos obtener la IP real aquí, pero la registraremos en el redirect
+
+  // Buscar el enlace acortado en Supabase
+  const { data: linkData, error } = await supabase.from('short_links').select('*').eq('id', shortId).single();
+  if (error || !data) {
+    console.error(`❌ Error al buscar enlace acortado: ${error?.message || 'No encontrado'}`);
+    await bot.answerCallbackQuery(callbackQuery.id, { text: 'Enlace no encontrado', show_alert: true });
+    return;
+  }
+
+  const { original_url, user_id, token: storedToken, expires_at } = linkData;
+
+  if (new Date() > new Date(expires_at)) {
+    await bot.answerCallbackQuery(callbackQuery.id, { text: 'Enlace expirado', show_alert: true });
+    return;
+  }
+
+  // Verificar token
+  const expectedToken = generateToken(user_id, shortId, 'initial');
+  if (token !== storedToken && token !== expectedToken) {
+    await bot.answerCallbackQuery(callbackQuery.id, { text: 'Token inválido', show_alert: true });
+    return;
+  }
+
+  // Registrar el clic en Supabase con el @username del usuario que hizo clic
+  const { error: insertError } = await supabase.from('interactions').insert([{
+    type: 'click',
+    chat_id: linkData.chat_id,
+    message_id: linkData.message_id,
+    user_id,
+    username, // Registrar el @username del usuario que hizo clic
+    timestamp: new Date().toISOString(),
+    details: `Clic en: ${original_url}`
+  }]);
+  if (insertError) {
+    console.error(`❌ Error al registrar clic: ${insertError.message}`);
+  } else {
+    console.log(`✅ Clic registrado en Supabase: ${username} hizo clic en ${original_url}`);
+  }
+
+  // Generar el enlace de redirección
+  const redirectUrl = `${REDIRECT_BASE_URL}${shortId}?token=${token}`;
+  await bot.answerCallbackQuery(callbackQuery.id, { url: redirectUrl });
+});
+
+// **Manejar clics en enlaces (redirección final)**
+app.get('/redirect/:shortId', async (req, res) => {
+  const { shortId } = req.params;
+  const { token } = req.query;
+  const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+  const { data, error } = await supabase.from('short_links').select('*').eq('id', shortId).single();
+  if (error || !data) {
+    console.error(`❌ Error al buscar enlace acortado: ${error?.message || 'No encontrado'}`);
+    return res.status(404).send('Enlace no encontrado');
+  }
+
+  const { original_url, user_id, token: storedToken, expires_at, ip_address } = data;
+
+  if (new Date() > new Date(expires_at)) {
+    return res.status(403).send('Enlace expirado');
+  }
+
+  // Verificar token
+  const expectedToken = generateToken(user_id, shortId, ipAddress);
+  if (token !== storedToken && token !== expectedToken) {
+    return res.status(403).send('Token inválido');
+  }
+
+  // Actualizar IP si es la primera vez (solo para auditoría, no para bloquear)
+  if (!ip_address) {
+    const { error: updateError } = await supabase.from('short_links').update({ ip_address: ipAddress }).eq('id', shortId);
+    if (updateError) {
+      console.error(`❌ Error al actualizar IP en enlace acortado: ${updateError.message}`);
+    } else {
+      console.log(`✅ IP actualizada en enlace acortado: ${shortId}`);
+    }
+  }
+
+  res.redirect(original_url);
 });
 
 // **Detectar y manejar reenvíos**
@@ -340,64 +466,6 @@ bot.on('message', async (msg) => {
     console.log(`✅ Reenvío registrado en Supabase: ${username} reenvió mensaje ${forwardedMessageId}`);
   }
   stats.forwardsDetected++;
-});
-
-// **Manejar clics en enlaces**
-app.get('/redirect/:shortId', async (req, res) => {
-  const { shortId } = req.params;
-  const { token } = req.query;
-  const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-
-  const { data, error } = await supabase.from('short_links').select('*').eq('id', shortId).single();
-  if (error || !data) {
-    console.error(`❌ Error al buscar enlace acortado: ${error?.message || 'No encontrado'}`);
-    return res.status(404).send('Enlace no encontrado');
-  }
-
-  const { original_url, user_id, username, token: storedToken, expires_at, ip_address } = data;
-
-  if (new Date() > new Date(expires_at)) {
-    return res.status(403).send('Enlace expirado');
-  }
-
-  // Verificar IP (si ya se registró una IP, debe coincidir)
-  if (ip_address && ip_address !== ipAddress) {
-    return res.status(403).send('Acceso denegado: IP no autorizada');
-  }
-
-  // Verificar token
-  const expectedToken = generateToken(user_id, shortId, ipAddress);
-  if (token !== storedToken && token !== expectedToken) {
-    return res.status(403).send('Token inválido');
-  }
-
-  // Actualizar IP y token si es la primera vez
-  if (!ip_address) {
-    const { error: updateError } = await supabase.from('short_links').update({ ip_address: ipAddress, token: expectedToken }).eq('id', shortId);
-    if (updateError) {
-      console.error(`❌ Error al actualizar IP en enlace acortado: ${updateError.message}`);
-    } else {
-      console.log(`✅ IP actualizada en enlace acortado: ${shortId}`);
-    }
-  }
-
-  // Registrar clic
-  const { error: insertError } = await supabase.from('interactions').insert([{
-    type: 'click',
-    chat_id: data.chat_id,
-    message_id: data.message_id,
-    user_id,
-    username,
-    timestamp: new Date().toISOString(),
-    details: `Clic en: ${original_url} desde IP: ${ipAddress}`
-  }]);
-  if (insertError) {
-    console.error(`❌ Error al registrar clic: ${insertError.message}`);
-  } else {
-    console.log(`✅ Clic registrado en Supabase: ${username} hizo clic en ${original_url}`);
-  }
-
-  res.redirect(original_url);
 });
 
 // **Comando /visto**
