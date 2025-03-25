@@ -15,6 +15,15 @@ const SIGNATURE = '\n\n✨ EntresHijos ✨';
 // Advertencia para no compartir
 const WARNING_MESSAGE = '\n⚠️ Este mensaje es exclusivo para este grupo. No lo compartas para proteger el contenido.';
 
+// Lista de frases personalizadas para reemplazar los enlaces
+const CUSTOM_PHRASES = [
+  'EntresHijos, siempre unidos',
+  'EntresHijos siempre contigo',
+  'EntresHijos, juntos por siempre',
+  'EntresHijos, tu compañero fiel',
+  'EntresHijos, conectando pasiones',
+];
+
 // Configuración del servidor webhook
 const PORT = process.env.PORT || 8443;
 const WEBHOOK_URL = 'https://entreboton.onrender.com/webhook';
@@ -129,10 +138,22 @@ function splitMessage(text, maxLength = 4096) {
   return parts;
 }
 
-// **Estructurar mensaje con enlaces acortados (sin modificar el texto original)**
+// **Estructurar mensaje con enlaces acortados (reemplazando URLs por frases personalizadas)**
 async function structureMessage(text, urls, messageId, chatId, userId, username) {
-  if (!text && !urls.length) return { formattedText: '', urlPositions: [], shortLinks: [] };
-  const formattedText = text || ''; // Mantenemos el texto original sin modificaciones
+  if (!text && !urls.length) return { formattedText: '', shortLinks: [] };
+
+  // Si no hay texto, usamos un texto por defecto
+  let formattedText = text || '📢 Publicación';
+
+  // Reemplazar los enlaces en el texto por frases personalizadas
+  if (urls.length) {
+    urls.forEach((url, index) => {
+      const phraseIndex = index % CUSTOM_PHRASES.length; // Seleccionar frase cíclicamente
+      const replacementPhrase = CUSTOM_PHRASES[phraseIndex];
+      formattedText = formattedText.replace(url, replacementPhrase);
+    });
+  }
+
   const shortLinks = [];
 
   console.log(`📝 Procesando ${urls.length} enlaces...`);
