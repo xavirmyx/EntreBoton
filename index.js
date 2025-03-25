@@ -1,8 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
-const shortid = require('shortid');
-const crypto = require('crypto');
+const { nanoid } = require('nanoid');
 
 // Configuración de logging
 console.log('🚀 Iniciando el bot EntresHijos...');
@@ -74,13 +73,13 @@ function extractUrls(msg) {
 // **Generar token para autenticación (truncado a 32 caracteres)**
 function generateToken(userId, shortId, ipAddress) {
   const secret = process.env.TOKEN_SECRET || 'tu-clave-secreta-aqui-32-caracteres';
-  const fullToken = crypto.createHmac('sha256', secret).update(`${userId}-${shortId}-${ipAddress}`).digest('hex');
+  const fullToken = require('crypto').createHmac('sha256', secret).update(`${userId}-${shortId}-${ipAddress}`).digest('hex');
   return fullToken.substring(0, 32); // Truncar a 32 caracteres para cumplir con el límite de callback_data
 }
 
 // **Acortar URL y almacenar en Supabase**
 async function shortenUrl(originalUrl, messageId, chatId, userId, username, expiryHours = 24) {
-  const shortId = shortid.generate();
+  const shortId = nanoid();
   const token = generateToken(userId, shortId, 'initial');
   const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString();
 
@@ -335,7 +334,7 @@ bot.on('callback_query', async (query) => {
     });
 
     // Generar un token único para la redirección
-    const token = crypto.randomBytes(16).toString('hex');
+    const token = require('crypto').randomBytes(16).toString('hex');
     const redirectUrl = `https://entreboton.onrender.com/redirect/${shortCode}?token=${token}`;
 
     // Responder al callback sin usar el parámetro url
@@ -491,7 +490,7 @@ bot.onText(/\/banuser (\d+)/, async (msg, match) => {
   bannedUsers.add(targetUserId);
   await bot.sendMessage(channel.chat_id, `🚫 El usuario con ID ${targetUserId} ha sido bloqueado y no podrá reenviar mensajes.`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
 });
-await bot.sendMessage(channel.chat_id, `🚫 El usuario con ID ${targetUserId} ha sido bloqueado y no podrá reenviar mensajes.`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+
 // **Configurar webhook y arrancar**
 app.post('/webhook', (req, res) => {
   bot.processUpdate(req.body);
