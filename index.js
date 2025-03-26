@@ -518,7 +518,7 @@ bot.onText(/\/visto/, async (msg) => {
   await bot.sendMessage(channel.chat_id, response, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
 });
 
-// **Comando /clics (nuevo)**
+// **Comando /clics**
 bot.onText(/\/clics/, async (msg) => {
   const chatId = msg.chat.id.toString();
   const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
@@ -531,7 +531,8 @@ bot.onText(/\/clics/, async (msg) => {
     .from('clicks')
     .select(`
       *,
-      clicked_at (clicked_at AT TIME ZONE 'Europe/Madrid' AS clicked_at_local)
+      clicked_at (clicked_at AT TIME ZONE 'Europe/Madrid' AS clicked_at_local),
+      created_at (created_at AT TIME ZONE 'Europe/Madrid' AS created_at_local)
     `);
   if (error) {
     console.error(`❌ Error al obtener clics: ${error.message}`);
@@ -541,7 +542,7 @@ bot.onText(/\/clics/, async (msg) => {
   if (!data.length) return bot.sendMessage(channel.chat_id, '📊 No hay clics registrados.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
   let response = '<b>📊 Clics:</b>\n\n';
   data.forEach(r => {
-    response += `<b>ID:</b> ${r.id}\n<b>Short Code:</b> ${r.short_code}\n<b>Usuario:</b> ${r.username || 'Desconocido'}\n<b>Hora:</b> ${new Date(r.clicked_at_local).toLocaleString('es-ES')}\n\n`;
+    response += `<b>ID:</b> ${r.id}\n<b>Short Code:</b> ${r.short_code}\n<b>Usuario:</b> ${r.username || 'Desconocido'}\n<b>Hora de Clic:</b> ${new Date(r.clicked_at_local).toLocaleString('es-ES')}\n<b>Creado:</b> ${new Date(r.created_at_local).toLocaleString('es-ES')}\n\n`;
   });
   await bot.sendMessage(channel.chat_id, response, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
 });
