@@ -228,9 +228,11 @@ Soy un bot diseñado para proteger el contenido exclusivo de este grupo. Aquí t
 📸 <b>Proteger multimedia:</b> Evito que las fotos, videos y GIFs sean reenviados.
 🚨 <b>Detectar reenvíos:</b> Si alguien reenvía un mensaje exclusivo, lo detectaré y notificaré al grupo.
 📊 <b>Ver interacciones:</b> Usa /visto para ver quién ha interactuado con los mensajes.
+📊 <b>Ver clics:</b> Usa /clics para ver quién ha hecho clic en los enlaces.
 
 <b>Comandos útiles:</b>
-/visto - Ver interacciones (reenvíos y clics).
+/visto - Ver interacciones (reenvíos).
+/clics - Ver clics en enlaces.
 /stats - Ver estadísticas del bot.
 /banuser <user_id> - (Admins) Bloquear a un usuario para que no pueda reenviar mensajes.
 
@@ -512,6 +514,34 @@ bot.onText(/\/visto/, async (msg) => {
   let response = '<b>📊 Interacciones:</b>\n\n';
   data.forEach(r => {
     response += `<b>ID:</b> ${r.message_id}\n<b>Acción:</b> ${r.type}\n<b>Usuario:</b> ${r.username || 'Desconocido'}\n<b>Hora:</b> ${new Date(r.timestamp_local).toLocaleString('es-ES')}\n<b>Detalles:</b> ${r.details}\n\n`;
+  });
+  await bot.sendMessage(channel.chat_id, response, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+});
+
+// **Comando /clics (nuevo)**
+bot.onText(/\/clics/, async (msg) => {
+  const chatId = msg.chat.id.toString();
+  const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
+
+  if (!GRUPOS_PREDEFINIDOS[chatId]) return;
+  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return;
+
+  const channel = CANALES_ESPECIFICOS[chatId];
+  const { data, error } = await supabase
+    .from('clicks')
+    .select(`
+      *,
+      clicked_at (clicked_at AT TIME ZONE 'Europe/Madrid' AS clicked_at_local)
+    `);
+  if (error) {
+    console.error(`❌ Error al obtener clics: ${error.message}`);
+    return bot.sendMessage(channel.chat_id, '⚠️ Error al obtener clics.', { message_thread_id: channel.thread_id });
+  }
+
+  if (!data.length) return bot.sendMessage(channel.chat_id, '📊 No hay clics registrados.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+  let response = '<b>📊 Clics:</b>\n\n';
+  data.forEach(r => {
+    response += `<b>ID:</b> ${r.id}\n<b>Short Code:</b> ${r.short_code}\n<b>Usuario:</b> ${r.username || 'Desconocido'}\n<b>Hora:</b> ${new Date(r.clicked_at_local).toLocaleString('es-ES')}\n\n`;
   });
   await bot.sendMessage(channel.chat_id, response, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
 });
