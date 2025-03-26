@@ -496,7 +496,13 @@ bot.onText(/\/visto/, async (msg) => {
   if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return;
 
   const channel = CANALES_ESPECIFICOS[chatId];
-  const { data, error } = await supabase.from('interactions').select('*').eq('chat_id', chatId);
+  const { data, error } = await supabase
+    .from('interactions')
+    .select(`
+      *,
+      timestamp (timestamp AT TIME ZONE 'Europe/Madrid' AS timestamp_local)
+    `)
+    .eq('chat_id', chatId);
   if (error) {
     console.error(`❌ Error al obtener interacciones: ${error.message}`);
     return bot.sendMessage(channel.chat_id, '⚠️ Error al obtener interacciones.', { message_thread_id: channel.thread_id });
@@ -505,7 +511,7 @@ bot.onText(/\/visto/, async (msg) => {
   if (!data.length) return bot.sendMessage(channel.chat_id, '📊 No hay interacciones registradas.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
   let response = '<b>📊 Interacciones:</b>\n\n';
   data.forEach(r => {
-    response += `<b>ID:</b> ${r.message_id}\n<b>Acción:</b> ${r.type}\n<b>Usuario:</b> ${r.username || 'Desconocido'}\n<b>Hora:</b> ${new Date(r.timestamp).toLocaleString('es-ES')}\n<b>Detalles:</b> ${r.details}\n\n`;
+    response += `<b>ID:</b> ${r.message_id}\n<b>Acción:</b> ${r.type}\n<b>Usuario:</b> ${r.username || 'Desconocido'}\n<b>Hora:</b> ${new Date(r.timestamp_local).toLocaleString('es-ES')}\n<b>Detalles:</b> ${r.details}\n\n`;
   });
   await bot.sendMessage(channel.chat_id, response, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
 });
