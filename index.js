@@ -46,8 +46,8 @@ const CUSTOM_PHRASES = [
 
 // Configuración del servidor webhook
 const PORT = process.env.PORT || 8443;
-const WEBHOOK_URL = 'https://entreleton.onrender.com/webhook'; // Corregido de entreboton a entreleton
-const REDIRECT_BASE_URL = 'https://entreleton.onrender.com/redirect/'; // Corregido de entreboton a entreleton
+const WEBHOOK_URL = 'https://entreboton.onrender.com/webhook';
+const REDIRECT_BASE_URL = 'https://entreboton.onrender.com/redirect/';
 
 // Configuración de Supabase (usando variables de entorno)
 const SUPABASE_URL = 'https://ycvkdxzxrzuwnkybmjwf.supabase.co';
@@ -82,11 +82,6 @@ const bot = new TelegramBot(TOKEN, { polling: false });
 // Crear el servidor Express
 const app = express();
 app.use(express.json());
-
-// Ruta para la raíz (/) - Agregada para evitar el error 404 en UptimeRobot
-app.get('/', (req, res) => {
-  res.status(200).send('¡EntresHijos Bot está funcionando! 🚀');
-});
 
 // **Sanitizar texto**
 function sanitizeText(text) {
