@@ -348,7 +348,7 @@ bot.on('message', async (msg) => {
 bot.on('callback_query', async (query) => {
   const callbackQueryId = query.id;
   const callbackData = query.data; // Formato: "click:shortId:token"
-  const username = query.from.username || query.from.id;
+  const username = query.from.username ? `@${query.from.username}` : query.from.first_name; // Usamos @username si existe, si no, el nombre
   const chatId = query.message.chat.id;
   const messageId = query.message.message_id;
 
@@ -398,9 +398,10 @@ bot.on('callback_query', async (query) => {
       show_alert: true,
     });
 
-    // Enviar un mensaje con el enlace acortado como botón inline y programar su eliminación
-    const redirectMessage = await bot.sendMessage(chatId, 'Haz clic para ver el contenido:', {
+    // Enviar un mensaje con el enlace acortado como botón inline, mencionando al usuario
+    const redirectMessage = await bot.sendMessage(chatId, `${username}, haz clic para ver el contenido:`, {
       reply_to_message_id: messageId,
+      parse_mode: 'HTML', // Para que el @username se muestre correctamente
       reply_markup: {
         inline_keyboard: [
           [
