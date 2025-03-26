@@ -349,7 +349,7 @@ bot.on('callback_query', async (query) => {
   const callbackQueryId = query.id;
   const callbackData = query.data; // Formato: "click:shortId:token"
   const username = query.from.username ? `@${query.from.username}` : query.from.first_name; // Usamos @username si existe, si no, el nombre
-  const chatId = query.message.chat.id;
+  const chatId = query.message.chat.id.toString(); // Convertimos a string para coincidir con las claves de CANALES_ESPECIFICOS
   const messageId = query.message.message_id;
 
   try {
@@ -426,8 +426,16 @@ bot.on('callback_query', async (query) => {
   } catch (error) {
     console.error('Error al procesar el callback:', error);
     if (error.code === 'ETELEGRAM' && error.response?.body?.description?.includes('query is too old')) {
-      // El callback es demasiado antiguo, podemos ignorarlo o notificar al usuario
-      await bot.sendMessage(chatId, 'Lo siento, el enlace ha expirado. Por favor, intenta de nuevo.');
+      // El callback es demasiado antiguo, lo notificamos en el canal específico
+      const channel = CANALES_ESPECIFICOS[chatId];
+      if (channel) {
+        await bot.sendMessage(channel.chat_id, `${username}, lo siento, el enlace ha expirado. Por favor, intenta de nuevo.`, {
+          message_thread_id: channel.thread_id,
+          parse_mode: 'HTML'
+        });
+      } else {
+        console.error(`❌ No se encontró el canal específico para chatId: ${chatId}`);
+      }
     } else {
       // Otro tipo de error, notificar al usuario
       await bot.sendMessage(chatId, 'Ocurrió un error al procesar el enlace. Por favor, intenta de nuevo.');
