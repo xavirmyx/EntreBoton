@@ -52,9 +52,13 @@ const REDIRECT_BASE_URL = 'https://entreboton.onrender.com/redirect/';
 // Configuración de Supabase (usando variables de entorno)
 const SUPABASE_URL = 'https://ycvkdxzxrzuwnkybmjwf.supabase.co';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4crp1d25reWJtandmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDI4Mjg4NzYsImV4cCI6MjA1ODQwNDg3Nn0.1ts8XIpysbMe5heIg3oWLfqKxReusZxemw4lk2WZ4GI';
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY; // Nueva variable para la clave service_role
 
-// Cliente de Supabase con permisos anónimos (para operaciones generales)
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Cliente de Supabase con permisos anónimos (para operaciones de lectura)
+const supabaseAnon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// Cliente de Supabase con permisos de service_role (para operaciones de escritura)
+const supabaseService = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 // Configuración de grupos y canales específicos
 const GRUPOS_PREDEFINIDOS = { '-1002348662107': 'GLOBAL SPORTS STREAM' };
@@ -127,7 +131,7 @@ async function shortenUrl(originalUrl, messageId, chatId, userId, username, expi
     dataToInsert.username = username;
   }
 
-  const { error } = await supabase.from('short_links').insert([dataToInsert]);
+  const { error } = await supabaseService.from('short_links').insert([dataToInsert]); // Usamos supabaseService para escritura
   if (error) {
     console.error(`❌ Error al guardar enlace acortado: ${error.message}`);
     return null;
@@ -349,7 +353,7 @@ bot.on('callback_query', async (query) => {
   const callbackQueryId = query.id;
   const callbackData = query.data; // Formato: "click:shortId:token"
   const username = query.from.username ? `@${query.from.username}` : query.from.first_name; // Usamos @username si existe, si no, el nombre
-  const chatId = query.message.chat.id.toString(); // Convertimos a string para coincidir con las claves de CANALES_ESPECIFICOS
+  const chatId = query.message.chat.id;
   const messageId = query.message.message_id;
 
   try {
@@ -364,7 +368,7 @@ bot.on('callback_query', async (query) => {
     const token = dataParts[2]; // El token es la tercera parte
 
     // Obtener el enlace original desde Supabase usando el shortId
-    const { data: linkData, error } = await supabase
+    const { data: linkData, error } = await supabaseAnon
       .from('short_links')
       .select('original_url')
       .eq('id', shortId) // Usamos 'id' porque es la columna que contiene el shortId en la tabla short_links
@@ -377,8 +381,8 @@ bot.on('callback_query', async (query) => {
 
     const originalUrl = linkData.original_url;
 
-    // Registrar el clic en Supabase
-    const { error: clickError } = await supabase.from('clicks').insert({
+    // Registrar el clic en Supabase usando el cliente con service_role
+    const { error: clickError } = await supabaseService.from('clicks').insert({
       short_code: shortId, // Guardamos solo el shortId
       username: username,
       clicked_at: new Date().toISOString(),
@@ -386,6 +390,8 @@ bot.on('callback_query', async (query) => {
 
     if (clickError) {
       console.error('Error al registrar el clic en Supabase:', clickError);
+    } else {
+      console.log('✅ Clic registrado correctamente en Supabase');
     }
 
     // Generar un token único para la redirección
@@ -426,16 +432,8 @@ bot.on('callback_query', async (query) => {
   } catch (error) {
     console.error('Error al procesar el callback:', error);
     if (error.code === 'ETELEGRAM' && error.response?.body?.description?.includes('query is too old')) {
-      // El callback es demasiado antiguo, lo notificamos en el canal específico
-      const channel = CANALES_ESPECIFICOS[chatId];
-      if (channel) {
-        await bot.sendMessage(channel.chat_id, `${username}, lo siento, el enlace ha expirado. Por favor, intenta de nuevo.`, {
-          message_thread_id: channel.thread_id,
-          parse_mode: 'HTML'
-        });
-      } else {
-        console.error(`❌ No se encontró el canal específico para chatId: ${chatId}`);
-      }
+      // El callback es demasiado antiguo, podemos ignorarlo o notificar al usuario
+      await bot.sendMessage(chatId, 'Lo siento, el enlace ha expirado. Por favor, intenta de nuevo.');
     } else {
       // Otro tipo de error, notificar al usuario
       await bot.sendMessage(chatId, 'Ocurrió un error al procesar el enlace. Por favor, intenta de nuevo.');
@@ -481,7 +479,7 @@ bot.on('message', async (msg) => {
     console.error(`❌ No se pudo eliminar el mensaje: ${error.message}`);
   }
 
-  const { error } = await supabase.from('interactions').insert([{
+  const { error } = await supabaseService.from('interactions').insert([{
     type: 'forward',
     chat_id: originalChatId,
     message_id: forwardedMessageId,
@@ -507,7 +505,7 @@ bot.onText(/\/visto/, async (msg) => {
   if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return;
 
   const channel = CANALES_ESPECIFICOS[chatId];
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAnon
     .from('interactions')
     .select(`
       *,
@@ -536,7 +534,7 @@ bot.onText(/\/clics/, async (msg) => {
   if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return;
 
   const channel = CANALES_ESPECIFICOS[chatId];
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAnon
     .from('clicks')
     .select(`
       *,
@@ -613,7 +611,7 @@ app.get('/redirect/:shortId', async (req, res) => {
 
   try {
     // Buscar el enlace original en Supabase usando el shortId
-    const { data: linkData, error } = await supabase
+    const { data: linkData, error } = await supabaseAnon
       .from('short_links')
       .select('original_url, expires_at')
       .eq('id', shortId)
