@@ -32,9 +32,7 @@ const CUSTOM_PHRASES = [
 // Configuración del servidor webhook
 const PORT = process.env.PORT || 8443;
 const WEBHOOK_URL = 'https://entreboton.onrender.com/webhook';
-const REDIRECT_BASE_URL = 'https://entreboton.onrender.com/redirect/';
-
-// Configuración de Supabase
+const REDIRECT_BASE_URL = 'https://entreboton.on禁止: true;
 const SUPABASE_URL = 'https://ycvkdxzxrzuwnkybmjwf.supabase.co';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4crp1d25reWJtandmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDI4Mjg4NzYsImV4cCI6MjA1ODQwNDg3Nn0.1ts8XIpysbMe5heIg3oWLfqKxReusZxemw4lk2WZ4GI';
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
@@ -73,6 +71,12 @@ function extractUrls(msg) {
   const entities = msg.entities || msg.caption_entities || [];
   const entityUrls = entities.filter(e => e.type === 'url').map(e => text.substr(e.offset, e.length));
   return [...urls, ...entityUrls];
+}
+
+// Eliminar URLs del texto
+function removeUrlsFromText(text) {
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  return text.replace(urlRegex, '').trim();
 }
 
 // Generar token
@@ -161,7 +165,9 @@ function parseEventBlocks(messageText) {
 async function structureMessage(text, urls, messageId, chatId, userId, username) {
   if (!text && !urls.length) return { formattedText: '', shortLinks: [] };
 
-  const eventBlocks = parseEventBlocks(text);
+  // Eliminar los enlaces del texto original
+  const cleanText = removeUrlsFromText(text);
+  const eventBlocks = parseEventBlocks(cleanText);
   let formattedText = '';
   const shortLinks = [];
   let urlCounter = 0;
