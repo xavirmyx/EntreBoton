@@ -145,8 +145,8 @@ async function shortenUrl(originalUrl, messageId, chatId, userId, username, expi
   return { shortId, token };
 }
 
-// Dividir mensaje en partes si excede el límite de Telegram (4096 caracteres)
-function splitMessage(text, maxLength = 4096) {
+// Dividir mensaje en partes si excede el límite de Telegram (1024 para captions, 4096 para mensajes)
+function splitMessage(text, maxLength = 1024) {
   const parts = [];
   let currentPart = '';
 
@@ -166,7 +166,7 @@ function splitMessage(text, maxLength = 4096) {
   return parts;
 }
 
-// Nueva función para detectar bloques de eventos
+// Detectar bloques de eventos
 function parseEventBlocks(messageText) {
   const lines = messageText.split('\n').filter(line => line.trim());
   const eventBlocks = [];
@@ -205,9 +205,8 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
 
   for (const block of eventBlocks) {
     if (block.title) {
-      formattedText += `<b>${block.title}</b>\n`;
+      formattedText += `<b>${block.title}</b>\n`; // Solo el título en negrita
     }
-
     if (block.urls.length > 0) {
       const shortLinksPromises = block.urls.map(async (url) => {
         const shortLink = await shortenUrl(url, messageId, chatId, userId, username);
@@ -222,14 +221,8 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
 
       const results = (await Promise.all(shortLinksPromises)).filter(link => link !== null);
       shortLinks.push(...results);
-
-      for (const link of results) {
-        const phraseIndex = link.index % CUSTOM_PHRASES.length;
-        const replacementPhrase = CUSTOM_PHRASES[phraseIndex];
-        formattedText += `${replacementPhrase}\n`;
-      }
     }
-    formattedText += '\n';
+    formattedText += '\n'; // Separador entre eventos
   }
 
   formattedText = formattedText.trim();
@@ -319,7 +312,7 @@ bot.on('message', async (msg) => {
   caption += `${SIGNATURE}${WARNING_MESSAGE}`;
 
   try {
-    const messageParts = splitMessage(caption);
+    const messageParts = splitMessage(caption, 1024); // Límite para captions
     let sentMessage;
 
     // Crear botones inline organizados por evento
@@ -345,7 +338,7 @@ bot.on('message', async (msg) => {
 
     if (photo) {
       sentMessage = await bot.sendPhoto(channel.chat_id, photo, {
-        caption: messageParts[0],
+        caption: messageParts[0], // Solo la primera parte como caption
         message_thread_id: channel.thread_id,
         parse_mode: 'HTML',
         protect_content: true,
@@ -422,7 +415,7 @@ bot.on('callback_query', async (query) => {
 
     if (error || !linkData) {
       console.error('Error al obtener el enlace desde Supabase:', error);
-      return bot.answerCallbackQuery(callbackQueryId, { text: 'Error al procesar el enlace.' });
+      return bot.answerCallbackQuery(callbackQueryId, { text: 'Enlace no encontrado o expirado.' });
     }
 
     const originalUrl = linkData.original_url;
