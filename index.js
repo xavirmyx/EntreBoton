@@ -172,7 +172,7 @@ function parseEventBlocks(messageText) {
   const eventBlocks = [];
   let currentEvent = { title: '', urls: [] };
 
-  const urlRegex = /(https?:\/\/[^\sJonah.surf[^\s]+/g;
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
 
   for (const line of lines) {
     if (!urlRegex.test(line)) {
