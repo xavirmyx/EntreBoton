@@ -93,14 +93,21 @@ function sanitizeText(text) {
   return text.replace(/[<>&'"]/g, char => ({ '<': '<', '>': '>', '&': '&', "'": '\'', '"': '"' }[char] || char)).trim();
 }
 
-// **Extraer URLs**
+// **Extraer URLs (preservar todas las ocurrencias, incluso duplicados)**
 function extractUrls(msg) {
   const text = msg.text || msg.caption || '';
   const urlRegex = /(https?:\/\/[^\s]+)/g;
-  let urls = text.match(urlRegex) || [];
+  // Obtener todas las coincidencias del regex, sin eliminar duplicados
+  let urls = [];
+  let match;
+  while ((match = urlRegex.exec(text)) !== null) {
+    urls.push(match[0]);
+  }
+  // También extraer URLs de las entidades, si existen
   const entities = msg.entities || msg.caption_entities || [];
   const entityUrls = entities.filter(e => e.type === 'url').map(e => text.substr(e.offset, e.length));
-  return [...new Set([...urls, ...entityUrls])];
+  // Combinar todas las URLs, preservando duplicados
+  return [...urls, ...entityUrls];
 }
 
 // **Generar token para autenticación (truncado a 32 caracteres)**
