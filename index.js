@@ -15,18 +15,18 @@ const SIGNATURE = '\n\n✨ EntresHijos ✨';
 // Advertencia para no compartir
 const WARNING_MESSAGE = '\n⚠️ Este mensaje es exclusivo para este grupo. No lo compartas para proteger el contenido.';
 
-// Lista de frases personalizadas para los botones
+// Lista de frases personalizadas
 const CUSTOM_PHRASES = [
-  'Ver transmisión',
-  'Acceder al enlace',
-  'Abrir partido',
-  'Ver evento',
-  'Enlace protegido',
-  'Clic aquí',
-  'Ver ahora',
-  'Acceso exclusivo',
-  'Enlace seguro',
-  'Ver streaming',
+  'EntresHijos, siempre unidos',
+  'EntresHijos siempre contigo',
+  'EntresHijos, juntos por siempre',
+  'EntresHijos, tu compañero fiel',
+  'EntresHijos, conectando pasiones',
+  'EntresHijos, siempre a tu lado',
+  'EntresHijos, compartiendo momentos',
+  'EntresHijos, creando recuerdos',
+  'EntresHijos, uniendo corazones',
+  'EntresHijos, tu hogar digital',
 ];
 
 // Configuración del servidor webhook
@@ -157,7 +157,7 @@ function parseEventBlocks(messageText) {
   return eventBlocks;
 }
 
-// Estructurar mensaje con bloques de eventos y enlaces acortados
+// Estructurar mensaje con bloques de eventos
 async function structureMessage(text, urls, messageId, chatId, userId, username) {
   if (!text && !urls.length) return { formattedText: '', shortLinks: [] };
 
@@ -187,10 +187,10 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
       const results = (await Promise.all(shortLinksPromises)).filter(link => link !== null);
       shortLinks.push(...results);
 
-      // Añadir una línea por cada enlace con un número o identificador
+      // Añadir una frase personalizada por cada enlace
       results.forEach((link, idx) => {
         const phraseIndex = link.index % CUSTOM_PHRASES.length;
-        formattedText += `${idx + 1}. ${CUSTOM_PHRASES[phraseIndex]}\n`;
+        formattedText += `${CUSTOM_PHRASES[phraseIndex]}\n`;
       });
     }
     formattedText += '\n'; // Separador entre eventos
@@ -287,21 +287,19 @@ bot.on('message', async (msg) => {
     // Crear botones inline organizados por evento
     const inlineKeyboard = [];
     let currentEventButtons = [];
-    let currentEventLinks = [];
+    let linkIndex = 1;
 
     shortLinks.forEach((link, index) => {
-      const phraseIndex = link.index % CUSTOM_PHRASES.length;
       currentEventButtons.push({
-        text: `${CUSTOM_PHRASES[phraseIndex]} ${currentEventLinks.length + 1}`,
+        text: `Enlace ${linkIndex++}`,
         callback_data: link.callbackData
       });
-      currentEventLinks.push(link);
 
       const nextLink = shortLinks[index + 1];
-      if (!nextLink || nextLink.index !== link.index + 1 || currentEventButtons.length === shortLinks.filter(l => l.index === link.index).length) {
+      if (!nextLink || nextLink.index !== link.index + 1) {
         inlineKeyboard.push([...currentEventButtons]);
         currentEventButtons = [];
-        currentEventLinks = [];
+        linkIndex = 1; // Reiniciar el contador para el próximo evento
       }
     });
 
