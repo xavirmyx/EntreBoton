@@ -137,11 +137,12 @@ function splitMessage(text, maxLength = 1024) {
   return parts;
 }
 
-// Detectar bloques de eventos
-function parseEventBlocks(messageText) {
+// Detectar bloques de eventos y asignar URLs
+function parseEventBlocks(messageText, urls) {
   const lines = messageText.split('\n').filter(line => line.trim());
   const eventBlocks = [];
   let currentEvent = { title: '', urls: [] };
+  let urlIndex = 0;
 
   const urlRegex = /(https?:\/\/[^\s]+)/g;
 
@@ -152,7 +153,11 @@ function parseEventBlocks(messageText) {
       }
       currentEvent = { title: line.trim(), urls: [] };
     } else {
-      currentEvent.urls.push(line.trim());
+      // Asignar el enlace correspondiente desde el array de URLs extraídas
+      if (urlIndex < urls.length) {
+        currentEvent.urls.push(urls[urlIndex]);
+        urlIndex++;
+      }
     }
   }
 
@@ -167,9 +172,8 @@ function parseEventBlocks(messageText) {
 async function structureMessage(text, urls, messageId, chatId, userId, username) {
   if (!text && !urls.length) return { formattedText: '', shortLinks: [] };
 
-  // Eliminar los enlaces del texto original
-  const cleanText = removeUrlsFromText(text);
-  const eventBlocks = parseEventBlocks(cleanText);
+  // Parsear los bloques de eventos con el texto original y las URLs extraídas
+  const eventBlocks = parseEventBlocks(text, urls);
   let formattedText = '';
   const shortLinks = [];
   let urlCounter = 0;
@@ -204,6 +208,8 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
     formattedText += '\n'; // Separador entre eventos
   }
 
+  // Eliminar los enlaces del texto final
+  formattedText = removeUrlsFromText(formattedText);
   formattedText = formattedText.trim();
   console.log(`✅ ${shortLinks.length} enlaces acortados.`);
   console.log(`📝 Texto formateado: ${formattedText}`);
