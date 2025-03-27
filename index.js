@@ -97,16 +97,13 @@ function sanitizeText(text) {
 function extractUrls(msg) {
   const text = msg.text || msg.caption || '';
   const urlRegex = /(https?:\/\/[^\s]+)/g;
-  // Obtener todas las coincidencias del regex, sin eliminar duplicados
   let urls = [];
   let match;
   while ((match = urlRegex.exec(text)) !== null) {
     urls.push(match[0]);
   }
-  // También extraer URLs de las entidades, si existen
   const entities = msg.entities || msg.caption_entities || [];
   const entityUrls = entities.filter(e => e.type === 'url').map(e => text.substr(e.offset, e.length));
-  // Combinar todas las URLs, preservando duplicados
   return [...urls, ...entityUrls];
 }
 
@@ -284,73 +281,82 @@ bot.on('message', async (msg) => {
   const channel = CANALES_ESPECIFICOS[chatId];
   const loadingMsg = await bot.sendMessage(channel.chat_id, '⏳ Generando publicación...', { message_thread_id: channel.thread_id });
 
-  let caption = text || '📢 Publicación';
   let shortLinks = [];
+  let formattedText = text || '📢 Publicación';
+
   if (urls.length) {
-    const { formattedText, shortLinks: links } = await structureMessage(text, urls, loadingMsg.message_id, chatId, userId, username);
-    caption = formattedText || '📢 Publicación';
-    shortLinks = links;
+    const result = await structureMessage(text, urls, loadingMsg.message_id, chatId, userId, username);
+    formattedText = result.formattedText || '📢 Publicación';
+    shortLinks = result.shortLinks;
   }
-  caption += `${SIGNATURE}${WARNING_MESSAGE}`;
 
   try {
-    const messageParts = splitMessage(caption);
-    let sentMessage;
-
-    // Crear botones inline genéricos para los enlaces
-    const inlineKeyboard = shortLinks.map(link => [{
-      text: '🔗 Abrir enlace',
-      callback_data: link.callbackData
-    }]);
-
     await bot.deleteMessage(channel.chat_id, loadingMsg.message_id, { message_thread_id: channel.thread_id });
 
-    if (photo) {
-      sentMessage = await bot.sendPhoto(channel.chat_id, photo, {
-        caption: messageParts[0],
-        message_thread_id: channel.thread_id,
-        parse_mode: 'HTML',
-        protect_content: true,
-        reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
-      });
-      for (let i = 1; i < messageParts.length; i++) {
-        await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
-      }
-    } else if (video) {
-      sentMessage = await bot.sendVideo(channel.chat_id, video, {
-        caption: messageParts[0],
-        message_thread_id: channel.thread_id,
-        parse_mode: 'HTML',
-        protect_content: true,
-        reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
-      });
-      for (let i = 1; i < messageParts.length; i++) {
-        await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
-      }
-    } else if (animation) {
-      sentMessage = await bot.sendAnimation(channel.chat_id, animation, {
-        caption: messageParts[0],
-        message_thread_id: channel.thread_id,
-        parse_mode: 'HTML',
-        protect_content: true,
-        reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
-      });
-      for (let i = 1; i < messageParts.length; i++) {
-        await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
-      }
-    } else {
-      sentMessage = await bot.sendMessage(channel.chat_id, messageParts[0], {
-        message_thread_id: channel.thread_id,
-        parse_mode: 'HTML',
-        disable_web_page_preview: true,
-        protect_content: true,
-        reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
-      });
-      for (let i = 1; i < messageParts.length; i++) {
-        await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', disable_web_page_preview: true, protect_content: true });
+    // Dividir el mensaje en partes basadas en las líneas
+    const lines = formattedText.split('\n');
+    let currentMessage = '';
+    let linkIndex = 0; // Índice para rastrear qué enlace corresponde a cada parte
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue; // Saltar líneas vacías
+
+      currentMessage += line + '\n';
+
+      // Verificar si la línea contiene una frase personalizada (indicando que hay un enlace)
+      const hasCustomPhrase = CUSTOM_PHRASES.some(phrase => line.includes(phrase));
+      const isLastLine = i === lines.length - 1;
+
+      // Si la línea contiene una frase personalizada o es la última línea, enviar el mensaje acumulado
+      if (hasCustomPhrase || isLastLine) {
+        if (currentMessage.trim()) {
+          let messageToSend = currentMessage.trim();
+
+          // Si la línea contiene una frase personalizada, agregar un botón inline
+          if (hasCustomPhrase && linkIndex < shortLinks.length) {
+            const link = shortLinks[linkIndex];
+            const inlineKeyboard = [[{
+              text: '🔗 Abrir enlace',
+              callback_data: link.callbackData
+            }]];
+
+            console.log(`📤 Enviando mensaje con botón: ${messageToSend}`);
+            const sentMessage = await bot.sendMessage(channel.chat_id, messageToSend, {
+              message_thread_id: channel.thread_id,
+              parse_mode: 'HTML',
+              disable_web_page_preview: true,
+              protect_content: true,
+              reply_markup: { inline_keyboard: inlineKeyboard }
+            });
+            messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: messageToSend });
+            linkIndex++; // Avanzar al siguiente enlace
+          } else {
+            // Si no hay enlace (por ejemplo, la última línea con "By Paco"), enviar sin botón
+            console.log(`📤 Enviando mensaje sin botón: ${messageToSend}`);
+            const sentMessage = await bot.sendMessage(channel.chat_id, messageToSend, {
+              message_thread_id: channel.thread_id,
+              parse_mode: 'HTML',
+              disable_web_page_preview: true,
+              protect_content: true
+            });
+            messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: messageToSend });
+          }
+        }
+        currentMessage = ''; // Reiniciar el mensaje acumulado
       }
     }
-    messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: caption });
+
+    // Enviar la firma y el mensaje de advertencia como un mensaje separado
+    const footerMessage = `${SIGNATURE}${WARNING_MESSAGE}`;
+    const sentFooter = await bot.sendMessage(channel.chat_id, footerMessage, {
+      message_thread_id: channel.thread_id,
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+      protect_content: true
+    });
+    messageOrigins.set(sentFooter.message_id, { chat_id: chatId, message_text: footerMessage });
+
     stats.messagesProcessed++;
   } catch (error) {
     console.error(`❌ Error al procesar mensaje: ${error.message}`);
