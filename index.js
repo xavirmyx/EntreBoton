@@ -143,29 +143,38 @@ function parseEventBlocks(messageText, urls) {
   const eventBlocks = [];
   let currentEvent = { title: '', urls: [] };
   let urlIndex = 0;
-
   const urlRegex = /(https?:\/\/[^\s]+)/g;
 
   for (const line of lines) {
-    if (!urlRegex.test(line)) {
-      if (currentEvent.urls.length > 0 || currentEvent.title) {
+    if (urlRegex.test(line)) {
+      // Si la línea es una URL, la ignoramos como título y avanzamos el índice de URLs
+      urlIndex++;
+    } else {
+      // Si la línea no es una URL, la tratamos como un título
+      if (currentEvent.title || currentEvent.urls.length > 0) {
         eventBlocks.push(currentEvent);
       }
       currentEvent = { title: line.trim(), urls: [] };
-    } else {
-      // Asignar el enlace correspondiente desde el array de URLs extraídas
-      if (urlIndex < urls.length) {
+      // Asignar las URLs correspondientes al bloque actual
+      while (urlIndex < urls.length && eventBlocks.length + 1 === eventBlocks.length + (currentEvent.title ? 1 : 0)) {
         currentEvent.urls.push(urls[urlIndex]);
         urlIndex++;
       }
     }
   }
 
-  if (currentEvent.urls.length > 0 || currentEvent.title) {
+  // Añadir el último bloque si tiene contenido
+  if (currentEvent.title || currentEvent.urls.length > 0) {
+    // Asignar las URLs restantes al último bloque
+    while (urlIndex < urls.length) {
+      currentEvent.urls.push(urls[urlIndex]);
+      urlIndex++;
+    }
     eventBlocks.push(currentEvent);
   }
 
-  return eventBlocks;
+  // Filtrar bloques vacíos
+  return eventBlocks.filter(block => block.title || block.urls.length > 0);
 }
 
 // Estructurar mensaje con bloques de eventos
