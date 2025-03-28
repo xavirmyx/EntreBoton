@@ -352,7 +352,7 @@ bot.on('callback_query', async (query) => {
       } catch (error) {
         console.error(`❌ Error al eliminar mensaje: ${error.message}`);
       }
-    }, 30 * 1000);
+    }, 10* 1000);
   } catch (error) {
     console.error('Error en callback:', error);
     await bot.sendMessage(chatId, 'Ocurrió un error al procesar el enlace.');
