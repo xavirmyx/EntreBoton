@@ -137,7 +137,8 @@ function splitIntoEvents(text) {
       currentEvent.urls.push(...urlsInLine);
       currentEvent.text.push(line.replace(urlRegex, '').trim());
     }
- fell  });
+  });
+
   if (currentEvent.text.length) events.push(currentEvent);
   return events;
 }
@@ -228,10 +229,6 @@ bot.on('message', async (msg) => {
   if (msg.text?.startsWith('/') || (!text && !photo && !video && !animation)) return;
 
   const channel = CANALES_ESPECIFICOS[chatId];
-
-  // Eliminar el mensaje original inmediatamente
-  await bot.deleteMessage(chatId, msg.message_id);
-
   const loadingMsg = await bot.sendMessage(channel.chat_id, '⏳ Generando publicación...', { message_thread_id: channel.thread_id });
 
   const events = splitIntoEvents(text);
@@ -355,7 +352,7 @@ bot.on('callback_query', async (query) => {
       } catch (error) {
         console.error(`❌ Error al eliminar mensaje: ${error.message}`);
       }
-    }, 10 * 1000);
+    }, 10* 1000);
   } catch (error) {
     console.error('Error en callback:', error);
     await bot.sendMessage(chatId, 'Ocurrió un error al procesar el enlace.');
@@ -488,6 +485,72 @@ bot.onText(/\/banuser (\d+)/, async (msg, match) => {
 
   bannedUsers.add(targetUserId);
   await bot.sendMessage(channel.chat_id, `🚫 Usuario ${targetUserId} bloqueado.`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+});
+
+// **Comando /gen**
+bot.onText(/\/gen (.+)/, async (msg, match) => {
+  const chatId = msg.chat.id.toString();
+  const threadId = msg.message_thread_id?.toString();
+
+  if (!GRUPOS_PREDEFINIDOS[chatId] || threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return;
+
+  const userId = msg.from.id.toString();
+  const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
+
+  if (bannedUsers.has(userId)) {
+    const channel = CANALES_ESPECIFICOS[chatId];
+    await bot.sendMessage(channel.chat_id, `🚫 Lo siento, ${username}, has sido bloqueado por compartir contenido exclusivo.`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+    return;
+  }
+
+  const text = sanitizeText(match[1]);
+  if (!text) {
+    const channel = CANALES_ESPECIFICOS[chatId];
+    await bot.sendMessage(channel.chat_id, '⚠️ Por favor, proporciona un texto después de /gen.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+    return;
+  }
+
+  const channel = CANALES_ESPECIFICOS[chatId];
+  const loadingMsg = await bot.sendMessage(channel.chat_id, '⏳ Generando publicación...', { message_thread_id: channel.thread_id });
+
+  const events = splitIntoEvents(text);
+  const { events: structuredEvents } = await structureMessage(events, loadingMsg.message_id, chatId, userId, username);
+
+  try {
+    await bot.deleteMessage(channel.chat_id, loadingMsg.message_id);
+
+    for (const event of structuredEvents) {
+      const eventText = event.text.join('\n');
+      const shortLinks = event.shortLinks;
+
+      let formattedText = eventText;
+      shortLinks.forEach((link, index) => {
+        const phraseIndex = index % CUSTOM_PHRASES.length;
+        formattedText = formattedText.replace(link.url, CUSTOM_PHRASES[phraseIndex]);
+      });
+
+      const messageText = `
+**${formattedText.trim()}**
+${SIGNATURE}
+${WARNING_MESSAGE}
+      `;
+
+      const inlineKeyboard = shortLinks.map((link, index) => [{ text: `🔗 Abrir enlace ${index + 1}`, callback_data: link.callbackData }]);
+
+      const sentMessage = await bot.sendMessage(channel.chat_id, messageText, {
+        message_thread_id: channel.thread_id,
+        parse_mode: 'Markdown',
+        disable_web_page_preview: true,
+        protect_content: true,
+        reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
+      });
+      messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: messageText });
+    }
+    stats.messagesProcessed++;
+  } catch (error) {
+    console.error(`❌ Error al procesar comando /gen: ${error.message}`);
+    await bot.sendMessage(channel.chat_id, '⚠️ Error al generar publicación.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+  }
 });
 
 // **Ruta webhook**
