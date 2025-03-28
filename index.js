@@ -52,7 +52,7 @@ const REDIRECT_BASE_URL = 'https://entreboton.onrender.com/redirect/';
 // Configuración de Supabase (usando variables de entorno)
 const SUPABASE_URL = 'https://ycvkdxzxrzuwnkybmjwf.supabase.co';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4crp1d25reWJtandmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDI4Mjg4NzYsImV4cCI6MjA1ODQwNDg3Nn0.1ts8XIpysbMe5heIg3oWLfqKxReusZxemw4lk2WZ4GI';
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY; // Nueva variable para la clave service_role
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
 // Cliente de Supabase con permisos anónimos (para operaciones de lectura)
 const supabaseAnon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -97,16 +97,13 @@ function sanitizeText(text) {
 function extractUrls(msg) {
   const text = msg.text || msg.caption || '';
   const urlRegex = /(https?:\/\/[^\s]+)/g;
-  // Obtener todas las coincidencias del regex, sin eliminar duplicados
   let urls = [];
   let match;
   while ((match = urlRegex.exec(text)) !== null) {
     urls.push(match[0]);
   }
-  // También extraer URLs de las entidades, si existen
   const entities = msg.entities || msg.caption_entities || [];
   const entityUrls = entities.filter(e => e.type === 'url').map(e => text.substr(e.offset, e.length));
-  // Combinar todas las URLs, preservando duplicados
   return [...urls, ...entityUrls];
 }
 
@@ -114,7 +111,7 @@ function extractUrls(msg) {
 function generateToken(userId, shortId, ipAddress) {
   const secret = process.env.TOKEN_SECRET || 'tu-clave-secreta-aqui-32-caracteres';
   const fullToken = require('crypto').createHmac('sha256', secret).update(`${userId}-${shortId}-${ipAddress}`).digest('hex');
-  return fullToken.substring(0, 32); // Truncar a 32 caracteres para cumplir con el límite de callback_data
+  return fullToken.substring(0, 32);
 }
 
 // **Acortar URL y almacenar en Supabase**
@@ -138,7 +135,7 @@ async function shortenUrl(originalUrl, messageId, chatId, userId, username, expi
     dataToInsert.username = username;
   }
 
-  const { error } = await supabaseService.from('short_links').insert([dataToInsert]); // Usamos supabaseService para escritura
+  const { error } = await supabaseService.from('short_links').insert([dataToInsert]);
   if (error) {
     console.error(`❌ Error al guardar enlace acortado: ${error.message}`);
     return null;
@@ -169,48 +166,79 @@ function splitMessage(text, maxLength = 4096) {
   return parts;
 }
 
-// **Estructurar mensaje con enlaces acortados (reemplazando URLs por frases personalizadas)**
+// **Estructurar mensaje con enlaces acortados (por evento)**
 async function structureMessage(text, urls, messageId, chatId, userId, username) {
   if (!text && !urls.length) return { formattedText: '', shortLinks: [] };
 
-  // Si no hay texto, usamos un texto por defecto
   let formattedText = text || '📢 Publicación';
-
   const shortLinks = [];
-  let urlCounter = 0; // Contador para asignar frases únicas a cada URL, incluso si son idénticas
+  const lines = formattedText.split('\n');
+  const events = [];
+  let currentEvent = { text: '', urls: [] };
 
-  console.log(`📝 URLs detectadas: ${urls}`);
-  console.log(`📝 Texto original: ${text}`);
-
-  // Procesar cada URL en el mensaje
-  const shortLinksPromises = urls.map(async (url) => {
-    const shortLink = await shortenUrl(url, messageId, chatId, userId, username);
-    if (shortLink) {
-      const { shortId, token } = shortLink;
-      const callbackData = `click:${shortId}:${token}`;
-      return { index: urlCounter++, url, shortId, token, callbackData };
+  // Separar el texto en eventos basados en líneas con horas
+  const timeRegex = /^\d{2}:\d{2}/;
+  for (const line of lines) {
+    if (timeRegex.test(line.trim())) {
+      if (currentEvent.text) {
+        events.push(currentEvent);
+      }
+      currentEvent = { text: line, urls: [] };
+    } else if (line) {
+      currentEvent.text += '\n' + line;
     }
-    console.warn(`⚠️ No se pudo acortar el enlace: ${url}`);
-    return null;
-  });
-
-  const results = (await Promise.all(shortLinksPromises)).filter(link => link !== null);
-
-  // Reemplazar cada URL en el texto por una frase personalizada
-  let currentText = formattedText;
-  for (const link of results) {
-    const phraseIndex = link.index % CUSTOM_PHRASES.length; // Seleccionar frase cíclicamente
-    const replacementPhrase = CUSTOM_PHRASES[phraseIndex];
-    // Reemplazar la primera ocurrencia de la URL en el texto
-    currentText = currentText.replace(link.url, replacementPhrase);
-    shortLinks.push(link);
+  }
+  if (currentEvent.text) {
+    events.push(currentEvent);
   }
 
-  formattedText = currentText;
+  // Asignar URLs a cada evento
+  let urlIndex = 0;
+  for (let i = 0; i < events.length && urlIndex < urls.length; i++) {
+    const eventText = events[i].text;
+    let nextEventIndex = i + 1;
+    let nextEventStart = nextEventIndex < events.length ? text.indexOf(events[nextEventIndex].text) : text.length;
 
-  console.log(`✅ ${results.length} enlaces acortados.`);
+    while (urlIndex < urls.length && text.indexOf(urls[urlIndex]) < nextEventStart && text.indexOf(urls[urlIndex]) >= text.indexOf(eventText)) {
+      events[i].urls.push(urls[urlIndex]);
+      urlIndex++;
+    }
+  }
+
+  // Procesar URLs por evento
+  for (const event of events) {
+    const eventUrls = event.urls;
+    if (eventUrls.length > 0) {
+      const shortLinksPromises = eventUrls.map(async (url, idx) => {
+        const shortLink = await shortenUrl(url, messageId, chatId, userId, username);
+        if (shortLink) {
+          const { shortId, token } = shortLink;
+          const callbackData = `click:${shortId}:${token}`;
+          return { url, shortId, token, callbackData };
+        }
+        console.warn(`⚠️ No se pudo acortar el enlace: ${url}`);
+        return null;
+      });
+
+      const results = (await Promise.all(shortLinksPromises)).filter(link => link !== null);
+      shortLinks.push(...results);
+
+      // Reemplazar URLs en el texto del evento con frases personalizadas
+      let eventTextModified = event.text;
+      results.forEach((link, idx) => {
+        const phraseIndex = idx % CUSTOM_PHRASES.length;
+        const replacementPhrase = CUSTOM_PHRASES[phraseIndex];
+        eventTextModified = eventTextModified.replace(link.url, replacementPhrase);
+      });
+      event.text = eventTextModified;
+    }
+  }
+
+  // Reconstruir el texto formateado
+  formattedText = events.map(event => event.text.trim()).join('\n\n');
+  console.log(`✅ ${shortLinks.length} enlaces acortados.`);
   console.log(`📝 Texto formateado: ${formattedText}`);
-  return { formattedText, shortLinks };
+  return { formattedText, shortLinks, events };
 }
 
 // **Verificar si el usuario es administrador**
@@ -286,10 +314,12 @@ bot.on('message', async (msg) => {
 
   let caption = text || '📢 Publicación';
   let shortLinks = [];
+  let events = [];
   if (urls.length) {
-    const { formattedText, shortLinks: links } = await structureMessage(text, urls, loadingMsg.message_id, chatId, userId, username);
+    const { formattedText, shortLinks: links, events: eventData } = await structureMessage(text, urls, loadingMsg.message_id, chatId, userId, username);
     caption = formattedText || '📢 Publicación';
     shortLinks = links;
+    events = eventData;
   }
   caption += `${SIGNATURE}${WARNING_MESSAGE}`;
 
@@ -297,11 +327,11 @@ bot.on('message', async (msg) => {
     const messageParts = splitMessage(caption);
     let sentMessage;
 
-    // Crear botones inline genéricos para los enlaces
-    const inlineKeyboard = shortLinks.map(link => [{
-      text: '🔗 Abrir enlace',
-      callback_data: link.callbackData
-    }]);
+    // Crear botones inline por evento
+    const inlineKeyboards = events.map(event => {
+      const eventLinks = shortLinks.filter(link => event.urls.includes(link.url));
+      return eventLinks.map(link => [{ text: '🔗 Abrir enlace', callback_data: link.callbackData }]);
+    });
 
     await bot.deleteMessage(channel.chat_id, loadingMsg.message_id, { message_thread_id: channel.thread_id });
 
@@ -311,7 +341,7 @@ bot.on('message', async (msg) => {
         message_thread_id: channel.thread_id,
         parse_mode: 'HTML',
         protect_content: true,
-        reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
+        reply_markup: inlineKeyboards.length ? { inline_keyboard: inlineKeyboards.flat() } : undefined
       });
       for (let i = 1; i < messageParts.length; i++) {
         await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
@@ -322,7 +352,7 @@ bot.on('message', async (msg) => {
         message_thread_id: channel.thread_id,
         parse_mode: 'HTML',
         protect_content: true,
-        reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
+        reply_markup: inlineKeyboards.length ? { inline_keyboard: inlineKeyboards.flat() } : undefined
       });
       for (let i = 1; i < messageParts.length; i++) {
         await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
@@ -333,7 +363,7 @@ bot.on('message', async (msg) => {
         message_thread_id: channel.thread_id,
         parse_mode: 'HTML',
         protect_content: true,
-        reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
+        reply_markup: inlineKeyboards.length ? { inline_keyboard: inlineKeyboards.flat() } : undefined
       });
       for (let i = 1; i < messageParts.length; i++) {
         await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
@@ -344,7 +374,7 @@ bot.on('message', async (msg) => {
         parse_mode: 'HTML',
         disable_web_page_preview: true,
         protect_content: true,
-        reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
+        reply_markup: inlineKeyboards.length ? { inline_keyboard: inlineKeyboards.flat() } : undefined
       });
       for (let i = 1; i < messageParts.length; i++) {
         await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', disable_web_page_preview: true, protect_content: true });
@@ -361,27 +391,25 @@ bot.on('message', async (msg) => {
 // **Manejar clics en botones inline**
 bot.on('callback_query', async (query) => {
   const callbackQueryId = query.id;
-  const callbackData = query.data; // Formato: "click:shortId:token"
-  const username = query.from.username ? `@${query.from.username}` : query.from.first_name; // Usamos @username si existe, si no, el nombre
+  const callbackData = query.data;
+  const username = query.from.username ? `@${query.from.username}` : query.from.first_name;
   const chatId = query.message.chat.id;
   const messageId = query.message.message_id;
 
   try {
-    // Extraer el shortId del callbackData
     const dataParts = callbackData.split(':');
     if (dataParts.length !== 3 || dataParts[0] !== 'click') {
       console.error(`❌ Formato de callbackData inválido: ${callbackData}`);
       return bot.answerCallbackQuery(callbackQueryId, { text: 'Error: Formato de enlace inválido.' });
     }
 
-    const shortId = dataParts[1]; // El shortId es la segunda parte (por ejemplo, "Ea0OAKZO42dwpC_H7_08C")
-    const token = dataParts[2]; // El token es la tercera parte
+    const shortId = dataParts[1];
+    const token = dataParts[2];
 
-    // Obtener el enlace original desde Supabase usando el shortId
     const { data: linkData, error } = await supabaseAnon
       .from('short_links')
       .select('original_url')
-      .eq('id', shortId) // Usamos 'id' porque es la columna que contiene el shortId en la tabla short_links
+      .eq('id', shortId)
       .single();
 
     if (error || !linkData) {
@@ -391,9 +419,8 @@ bot.on('callback_query', async (query) => {
 
     const originalUrl = linkData.original_url;
 
-    // Registrar el clic en Supabase usando el cliente con service_role
     const { error: clickError } = await supabaseService.from('clicks').insert({
-      short_code: shortId, // Guardamos solo el shortId
+      short_code: shortId,
       username: username,
       clicked_at: new Date().toISOString(),
     });
@@ -404,33 +431,22 @@ bot.on('callback_query', async (query) => {
       console.log('✅ Clic registrado correctamente en Supabase');
     }
 
-    // Generar un token único para la redirección
     const redirectToken = require('crypto').randomBytes(16).toString('hex');
     const redirectUrl = `${REDIRECT_BASE_URL}${shortId}?token=${redirectToken}`;
 
-    // Responder al callback sin usar el parámetro url
     await bot.answerCallbackQuery(callbackQueryId, {
       text: 'Enlace procesado. Haz clic en el botón para continuar.',
       show_alert: true,
     });
 
-    // Enviar un mensaje con el enlace acortado como botón inline, mencionando al usuario
     const redirectMessage = await bot.sendMessage(chatId, `${username}, haz clic para ver el contenido:`, {
       reply_to_message_id: messageId,
-      parse_mode: 'HTML', // Para que el @username se muestre correctamente
+      parse_mode: 'HTML',
       reply_markup: {
-        inline_keyboard: [
-          [
-            {
-              text: 'Abrir enlace',
-              url: redirectUrl,
-            },
-          ],
-        ],
+        inline_keyboard: [[{ text: 'Abrir enlace', url: redirectUrl }]]
       },
     });
 
-    // Programar la eliminación del mensaje después de 30 segundos
     setTimeout(async () => {
       try {
         await bot.deleteMessage(chatId, redirectMessage.message_id);
@@ -438,14 +454,12 @@ bot.on('callback_query', async (query) => {
       } catch (error) {
         console.error(`❌ Error al eliminar el mensaje de redirección: ${error.message}`);
       }
-    }, 30 * 1000); // 30 segundos
+    }, 30 * 1000);
   } catch (error) {
     console.error('Error al procesar el callback:', error);
     if (error.code === 'ETELEGRAM' && error.response?.body?.description?.includes('query is too old')) {
-      // El callback es demasiado antiguo, podemos ignorarlo o notificar al usuario
       await bot.sendMessage(chatId, 'Lo siento, el enlace ha expirado. Por favor, intenta de nuevo.');
     } else {
-      // Otro tipo de error, notificar al usuario
       await bot.sendMessage(chatId, 'Ocurrió un error al procesar el enlace. Por favor, intenta de nuevo.');
     }
   }
@@ -617,10 +631,9 @@ app.post('/webhook', (req, res) => {
 // **Ruta para manejar la redirección de enlaces acortados**
 app.get('/redirect/:shortId', async (req, res) => {
   const { shortId } = req.params;
-  const { token } = req.query; // El token se pasa como query parameter (por ejemplo, ?token=someToken)
+  const { token } = req.query;
 
   try {
-    // Buscar el enlace original en Supabase usando el shortId
     const { data: linkData, error } = await supabaseAnon
       .from('short_links')
       .select('original_url, expires_at')
@@ -632,7 +645,6 @@ app.get('/redirect/:shortId', async (req, res) => {
       return res.status(404).send('Enlace no encontrado o expirado.');
     }
 
-    // Verificar si el enlace ha expirado
     const expiresAt = new Date(linkData.expires_at);
     const now = new Date();
     if (now > expiresAt) {
@@ -640,7 +652,6 @@ app.get('/redirect/:shortId', async (req, res) => {
       return res.status(410).send('El enlace ha expirado.');
     }
 
-    // Redirigir al enlace original
     console.log(`✅ Redirigiendo a: ${linkData.original_url}`);
     res.redirect(linkData.original_url);
   } catch (error) {
