@@ -137,8 +137,7 @@ function splitIntoEvents(text) {
       currentEvent.urls.push(...urlsInLine);
       currentEvent.text.push(line.replace(urlRegex, '').trim());
     }
-  });
-
+ fell  });
   if (currentEvent.text.length) events.push(currentEvent);
   return events;
 }
@@ -229,6 +228,10 @@ bot.on('message', async (msg) => {
   if (msg.text?.startsWith('/') || (!text && !photo && !video && !animation)) return;
 
   const channel = CANALES_ESPECIFICOS[chatId];
+
+  // Eliminar el mensaje original inmediatamente
+  await bot.deleteMessage(chatId, msg.message_id);
+
   const loadingMsg = await bot.sendMessage(channel.chat_id, '⏳ Generando publicación...', { message_thread_id: channel.thread_id });
 
   const events = splitIntoEvents(text);
@@ -352,7 +355,7 @@ bot.on('callback_query', async (query) => {
       } catch (error) {
         console.error(`❌ Error al eliminar mensaje: ${error.message}`);
       }
-    }, 10* 1000);
+    }, 10 * 1000);
   } catch (error) {
     console.error('Error en callback:', error);
     await bot.sendMessage(chatId, 'Ocurrió un error al procesar el enlace.');
