@@ -12,8 +12,8 @@ const TOKEN = '7624808452:AAHffFqqhaXtun4XthusBfeeeVDcp6Qsrs4';
 // Firma con emojis (permanente en todos los mensajes)
 const SIGNATURE = '\n\n✨ EntresHijos ✨';
 
-// Advertencia para no compartir
-const WARNING_MESSAGE = '\n⚠️ Este mensaje es exclusivo para este grupo. No lo compartas para proteger el contenido.';
+// Advertencia para no compartir (más prominente)
+const WARNING_MESSAGE = '\n**⚠️ Este contenido es exclusivo. No lo compartas ni tomes capturas de pantalla para protegerlo.**';
 
 // Lista de frases personalizadas para reemplazar los enlaces
 const CUSTOM_PHRASES = [
@@ -67,13 +67,13 @@ const CANALES_ESPECIFICOS = { '-1002348662107': { chat_id: '-1002348662107', thr
 // Mapa para almacenar orígenes de mensajes
 const messageOrigins = new Map();
 
-// Lista de usuarios bloqueados (almacenada en memoria, podrías moverla a Supabase para persistencia)
+// Lista de usuarios bloqueados (almacenada en memoria)
 const bannedUsers = new Set();
 
 // Registro de reenvíos por usuario (para bloqueo automático)
 const forwardCounts = new Map();
 
-// Estadísticas del bot (almacenadas en memoria, podrías moverlas a Supabase para persistencia)
+// Estadísticas del bot (almacenadas en memoria)
 const stats = {
   messagesProcessed: 0,
   forwardsDetected: 0,
@@ -166,18 +166,14 @@ function splitMessage(text, maxLength = 4096) {
   return parts;
 }
 
-// **Estructurar mensaje con enlaces acortados (por evento)**
-async function structureMessage(text, urls, messageId, chatId, userId, username) {
-  if (!text && !urls.length) return { formattedText: '', shortLinks: [], events: [] };
-
-  let formattedText = text || '📢 Publicación';
-  const shortLinks = [];
+// **Detectar eventos deportivos basados en líneas con horas**
+function detectEvents(text) {
+  const lines = text.split('\n');
   const events = [];
   let currentEvent = { text: '', urls: [] };
-  const lines = formattedText.split('\n');
-  const timeRegex = /^\d{2}:\d{2}/;
 
-  // Separar el texto en eventos basados en líneas con horas
+  const timeRegex = /^\d{2}:\d{2}/; // Detectar líneas que comienzan con hora (ej. "18:00")
+
   for (const line of lines) {
     if (timeRegex.test(line.trim())) {
       if (currentEvent.text) {
@@ -188,26 +184,33 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
       currentEvent.text += '\n' + line;
     }
   }
+
   if (currentEvent.text) {
     events.push(currentEvent);
   }
 
-  // Asignar URLs a cada evento
-  let urlIndex = 0;
-  for (let i = 0; i < events.length && urlIndex < urls.length; i++) {
-    const eventText = events[i].text;
-    let nextEventIndex = i + 1;
-    let nextEventStart = nextEventIndex < events.length ? text.indexOf(events[nextEventIndex].text) : text.length;
+  return events;
+}
 
-    while (urlIndex < urls.length && text.indexOf(urls[urlIndex]) < nextEventStart && text.indexOf(urls[urlIndex]) >= text.indexOf(eventText)) {
-      events[i].urls.push(urls[urlIndex]);
+// **Estructurar mensaje con enlaces acortados (por evento)**
+async function structureMessage(text, urls, messageId, chatId, userId, username) {
+  if (!text && !urls.length) return { events: [] };
+
+  const events = detectEvents(text);
+  const shortLinks = [];
+  let urlIndex = 0;
+
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i];
+    let eventText = event.text;
+    const eventUrls = [];
+
+    // Asignar URLs al evento actual
+    while (urlIndex < urls.length && (i === events.length - 1 || text.indexOf(urls[urlIndex]) < text.indexOf(events[i + 1]?.text || ''))) {
+      eventUrls.push(urls[urlIndex]);
       urlIndex++;
     }
-  }
 
-  // Procesar URLs por evento y reemplazarlas
-  for (const event of events) {
-    const eventUrls = event.urls;
     if (eventUrls.length > 0) {
       const shortLinksPromises = eventUrls.map(async (url, idx) => {
         const shortLink = await shortenUrl(url, messageId, chatId, userId, username);
@@ -224,21 +227,18 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
       shortLinks.push(...results);
 
       // Reemplazar URLs en el texto del evento con frases personalizadas
-      let eventTextModified = event.text;
+      let modifiedText = eventText;
       results.forEach((link, idx) => {
         const phraseIndex = idx % CUSTOM_PHRASES.length;
         const replacementPhrase = CUSTOM_PHRASES[phraseIndex];
-        eventTextModified = eventTextModified.replace(link.url, replacementPhrase);
+        modifiedText = modifiedText.replace(link.url, replacementPhrase);
       });
-      event.text = eventTextModified.trim();
+      event.text = modifiedText;
     }
   }
 
-  // Reconstruir el texto formateado con separación clara entre eventos
-  formattedText = events.map(event => event.text).join('\n\n');
   console.log(`✅ ${shortLinks.length} enlaces acortados.`);
-  console.log(`📝 Texto formateado: ${formattedText}`);
-  return { formattedText, shortLinks, events };
+  return { events, shortLinks };
 }
 
 // **Verificar si el usuario es administrador**
@@ -269,7 +269,7 @@ Soy un bot diseñado para proteger el contenido exclusivo de este grupo. Aquí t
 📌 <b>Proteger enlaces:</b> Convierto los enlaces en enlaces acortados y protegidos que expiran después de 24 horas.
 📸 <b>Proteger multimedia:</b> Evito que las fotos, videos y GIFs sean reenviados.
 🚨 <b>Detectar reenvíos:</b> Si alguien reenvía un mensaje exclusivo, lo detectaré y notificaré al grupo.
-📊 <b>Ver interacciones:</b> Usa /visto para ver quién ha interactado con los mensajes.
+📊 <b>Ver interacciones:</b> Usa /visto para ver quién ha interactuado con los mensajes.
 📊 <b>Ver clics:</b> Usa /clics para ver quién ha hecho clic en los enlaces.
 
 <b>Comandos útiles:</b>
@@ -312,64 +312,66 @@ bot.on('message', async (msg) => {
   const channel = CANALES_ESPECIFICOS[chatId];
   const loadingMsg = await bot.sendMessage(channel.chat_id, '⏳ Generando publicación...', { message_thread_id: channel.thread_id });
 
-  let caption = text || '📢 Publicación';
-  let shortLinks = [];
   let events = [];
+  let shortLinks = [];
   if (urls.length) {
-    const { formattedText, shortLinks: links, events: eventData } = await structureMessage(text, urls, loadingMsg.message_id, chatId, userId, username);
-    caption = formattedText || '📢 Publicación';
+    const { events: detectedEvents, shortLinks: links } = await structureMessage(text, urls, loadingMsg.message_id, chatId, userId, username);
+    events = detectedEvents;
     shortLinks = links;
-    events = eventData;
+  } else {
+    events = [{ text: text || '📢 Publicación' }];
   }
-  caption += `${SIGNATURE}${WARNING_MESSAGE}`;
 
   try {
-    await bot.deleteMessage(channel.chat_id, loadingMsg.message_id, { message_thread_id: channel.thread_id });
+    await bot.deleteMessage(channel.chat_id, loadingMsg.message_id);
 
-    // Enviar cada evento como un mensaje separado con sus botones
-    for (let i = 0; i < events.length; i++) {
-      const event = events[i];
-      const eventLinks = shortLinks.filter(link => event.urls.includes(link.url));
+    // Enviar cada evento como un mensaje separado
+    for (const event of events) {
+      const eventText = event.text;
+      const eventLinks = shortLinks.filter(link => eventText.includes(CUSTOM_PHRASES[shortLinks.indexOf(link) % CUSTOM_PHRASES.length]));
       const inlineKeyboard = eventLinks.map(link => [{ text: '🔗 Abrir enlace', callback_data: link.callbackData }]);
-      const eventCaption = event.text + `${SIGNATURE}${WARNING_MESSAGE}`;
+
+      const messageText = `
+**${eventText.trim()}**
+${SIGNATURE}
+${WARNING_MESSAGE}
+      `;
 
       let sentMessage;
-      if (i === 0 && (photo || video || animation)) {
-        if (photo) {
-          sentMessage = await bot.sendPhoto(channel.chat_id, photo, {
-            caption: eventCaption,
-            message_thread_id: channel.thread_id,
-            parse_mode: 'HTML',
-            protect_content: true,
-            reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
-          });
-        } else if (video) {
-          sentMessage = await bot.sendVideo(channel.chat_id, video, {
-            caption: eventCaption,
-            message_thread_id: channel.thread_id,
-            parse_mode: 'HTML',
-            protect_content: true,
-            reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
-          });
-        } else if (animation) {
-          sentMessage = await bot.sendAnimation(channel.chat_id, animation, {
-            caption: eventCaption,
-            message_thread_id: channel.thread_id,
-            parse_mode: 'HTML',
-            protect_content: true,
-            reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
-          });
-        }
-      } else {
-        sentMessage = await bot.sendMessage(channel.chat_id, eventCaption, {
+      if (photo) {
+        sentMessage = await bot.sendPhoto(channel.chat_id, photo, {
+          caption: messageText,
           message_thread_id: channel.thread_id,
-          parse_mode: 'HTML',
+          parse_mode: 'Markdown',
+          protect_content: true,
+          reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
+        });
+      } else if (video) {
+        sentMessage = await bot.sendVideo(channel.chat_id, video, {
+          caption: messageText,
+          message_thread_id: channel.thread_id,
+          parse_mode: 'Markdown',
+          protect_content: true,
+          reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
+        });
+      } else if (animation) {
+        sentMessage = await bot.sendAnimation(channel.chat_id, animation, {
+          caption: messageText,
+          message_thread_id: channel.thread_id,
+          parse_mode: 'Markdown',
+          protect_content: true,
+          reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
+        });
+      } else {
+        sentMessage = await bot.sendMessage(channel.chat_id, messageText, {
+          message_thread_id: channel.thread_id,
+          parse_mode: 'Markdown',
           disable_web_page_preview: true,
           protect_content: true,
           reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
         });
       }
-      messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: eventCaption });
+      messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: messageText });
     }
     stats.messagesProcessed++;
   } catch (error) {
@@ -552,7 +554,6 @@ bot.onText(/\/clics/, async (msg) => {
     .from('clicks')
     .select(`
       *,
-      clicked_at (clicked_at AT Ascendantly (https://ascendantly.com) warns: this link will redirect you to an external site outside of xAI's control
       clicked_at (clicked_at AT TIME ZONE 'Europe/Madrid' AS clicked_at_local),
       created_at (created_at AT TIME ZONE 'Europe/Madrid' AS created_at_local)
     `);
