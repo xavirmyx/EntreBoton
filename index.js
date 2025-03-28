@@ -168,23 +168,23 @@ function splitMessage(text, maxLength = 4096) {
 
 // **Estructurar mensaje con enlaces acortados (por evento)**
 async function structureMessage(text, urls, messageId, chatId, userId, username) {
-  if (!text && !urls.length) return { formattedText: '', shortLinks: [] };
+  if (!text && !urls.length) return { formattedText: '', shortLinks: [], events: [] };
 
   let formattedText = text || '📢 Publicación';
   const shortLinks = [];
-  const lines = formattedText.split('\n');
   const events = [];
   let currentEvent = { text: '', urls: [] };
+  const lines = formattedText.split('\n');
+  const timeRegex = /^\d{2}:\d{2}/;
 
   // Separar el texto en eventos basados en líneas con horas
-  const timeRegex = /^\d{2}:\d{2}/;
   for (const line of lines) {
     if (timeRegex.test(line.trim())) {
       if (currentEvent.text) {
         events.push(currentEvent);
       }
       currentEvent = { text: line, urls: [] };
-    } else if (line) {
+    } else if (line.trim()) {
       currentEvent.text += '\n' + line;
     }
   }
@@ -205,7 +205,7 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
     }
   }
 
-  // Procesar URLs por evento
+  // Procesar URLs por evento y reemplazarlas
   for (const event of events) {
     const eventUrls = event.urls;
     if (eventUrls.length > 0) {
@@ -230,12 +230,12 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
         const replacementPhrase = CUSTOM_PHRASES[phraseIndex];
         eventTextModified = eventTextModified.replace(link.url, replacementPhrase);
       });
-      event.text = eventTextModified;
+      event.text = eventTextModified.trim();
     }
   }
 
-  // Reconstruir el texto formateado
-  formattedText = events.map(event => event.text.trim()).join('\n\n');
+  // Reconstruir el texto formateado con separación clara entre eventos
+  formattedText = events.map(event => event.text).join('\n\n');
   console.log(`✅ ${shortLinks.length} enlaces acortados.`);
   console.log(`📝 Texto formateado: ${formattedText}`);
   return { formattedText, shortLinks, events };
@@ -269,7 +269,7 @@ Soy un bot diseñado para proteger el contenido exclusivo de este grupo. Aquí t
 📌 <b>Proteger enlaces:</b> Convierto los enlaces en enlaces acortados y protegidos que expiran después de 24 horas.
 📸 <b>Proteger multimedia:</b> Evito que las fotos, videos y GIFs sean reenviados.
 🚨 <b>Detectar reenvíos:</b> Si alguien reenvía un mensaje exclusivo, lo detectaré y notificaré al grupo.
-📊 <b>Ver interacciones:</b> Usa /visto para ver quién ha interactuado con los mensajes.
+📊 <b>Ver interacciones:</b> Usa /visto para ver quién ha interactado con los mensajes.
 📊 <b>Ver clics:</b> Usa /clics para ver quién ha hecho clic en los enlaces.
 
 <b>Comandos útiles:</b>
@@ -324,63 +324,53 @@ bot.on('message', async (msg) => {
   caption += `${SIGNATURE}${WARNING_MESSAGE}`;
 
   try {
-    const messageParts = splitMessage(caption);
-    let sentMessage;
-
-    // Crear botones inline por evento
-    const inlineKeyboards = events.map(event => {
-      const eventLinks = shortLinks.filter(link => event.urls.includes(link.url));
-      return eventLinks.map(link => [{ text: '🔗 Abrir enlace', callback_data: link.callbackData }]);
-    });
-
     await bot.deleteMessage(channel.chat_id, loadingMsg.message_id, { message_thread_id: channel.thread_id });
 
-    if (photo) {
-      sentMessage = await bot.sendPhoto(channel.chat_id, photo, {
-        caption: messageParts[0],
-        message_thread_id: channel.thread_id,
-        parse_mode: 'HTML',
-        protect_content: true,
-        reply_markup: inlineKeyboards.length ? { inline_keyboard: inlineKeyboards.flat() } : undefined
-      });
-      for (let i = 1; i < messageParts.length; i++) {
-        await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
+    // Enviar cada evento como un mensaje separado con sus botones
+    for (let i = 0; i < events.length; i++) {
+      const event = events[i];
+      const eventLinks = shortLinks.filter(link => event.urls.includes(link.url));
+      const inlineKeyboard = eventLinks.map(link => [{ text: '🔗 Abrir enlace', callback_data: link.callbackData }]);
+      const eventCaption = event.text + `${SIGNATURE}${WARNING_MESSAGE}`;
+
+      let sentMessage;
+      if (i === 0 && (photo || video || animation)) {
+        if (photo) {
+          sentMessage = await bot.sendPhoto(channel.chat_id, photo, {
+            caption: eventCaption,
+            message_thread_id: channel.thread_id,
+            parse_mode: 'HTML',
+            protect_content: true,
+            reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
+          });
+        } else if (video) {
+          sentMessage = await bot.sendVideo(channel.chat_id, video, {
+            caption: eventCaption,
+            message_thread_id: channel.thread_id,
+            parse_mode: 'HTML',
+            protect_content: true,
+            reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
+          });
+        } else if (animation) {
+          sentMessage = await bot.sendAnimation(channel.chat_id, animation, {
+            caption: eventCaption,
+            message_thread_id: channel.thread_id,
+            parse_mode: 'HTML',
+            protect_content: true,
+            reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
+          });
+        }
+      } else {
+        sentMessage = await bot.sendMessage(channel.chat_id, eventCaption, {
+          message_thread_id: channel.thread_id,
+          parse_mode: 'HTML',
+          disable_web_page_preview: true,
+          protect_content: true,
+          reply_markup: inlineKeyboard.length ? { inline_keyboard: inlineKeyboard } : undefined
+        });
       }
-    } else if (video) {
-      sentMessage = await bot.sendVideo(channel.chat_id, video, {
-        caption: messageParts[0],
-        message_thread_id: channel.thread_id,
-        parse_mode: 'HTML',
-        protect_content: true,
-        reply_markup: inlineKeyboards.length ? { inline_keyboard: inlineKeyboards.flat() } : undefined
-      });
-      for (let i = 1; i < messageParts.length; i++) {
-        await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
-      }
-    } else if (animation) {
-      sentMessage = await bot.sendAnimation(channel.chat_id, animation, {
-        caption: messageParts[0],
-        message_thread_id: channel.thread_id,
-        parse_mode: 'HTML',
-        protect_content: true,
-        reply_markup: inlineKeyboards.length ? { inline_keyboard: inlineKeyboards.flat() } : undefined
-      });
-      for (let i = 1; i < messageParts.length; i++) {
-        await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
-      }
-    } else {
-      sentMessage = await bot.sendMessage(channel.chat_id, messageParts[0], {
-        message_thread_id: channel.thread_id,
-        parse_mode: 'HTML',
-        disable_web_page_preview: true,
-        protect_content: true,
-        reply_markup: inlineKeyboards.length ? { inline_keyboard: inlineKeyboards.flat() } : undefined
-      });
-      for (let i = 1; i < messageParts.length; i++) {
-        await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', disable_web_page_preview: true, protect_content: true });
-      }
+      messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: eventCaption });
     }
-    messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: caption });
     stats.messagesProcessed++;
   } catch (error) {
     console.error(`❌ Error al procesar mensaje: ${error.message}`);
@@ -562,6 +552,7 @@ bot.onText(/\/clics/, async (msg) => {
     .from('clicks')
     .select(`
       *,
+      clicked_at (clicked_at AT Ascendantly (https://ascendantly.com) warns: this link will redirect you to an external site outside of xAI's control
       clicked_at (clicked_at AT TIME ZONE 'Europe/Madrid' AS clicked_at_local),
       created_at (created_at AT TIME ZONE 'Europe/Madrid' AS created_at_local)
     `);
