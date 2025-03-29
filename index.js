@@ -227,8 +227,15 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
 // **Verificar si el usuario es administrador**
 async function isAdmin(chatId, userId) {
   try {
-    const { members } = await bot.getChatAdministrators(chatId);
-    return members.some(member => member.user.id === userId);
+    console.log(`🔍 Verificando si ${userId} es administrador en ${chatId}`);
+    const admins = await bot.getChatAdministrators(chatId);
+    if (!admins || !Array.isArray(admins)) {
+      console.error('❌ Respuesta inválida de getChatAdministrators:', admins);
+      return false;
+    }
+    const isAdminUser = admins.some(member => member.user.id === userId);
+    console.log(`✅ Resultado de verificación: ${isAdminUser}`);
+    return isAdminUser;
   } catch (error) {
     console.error(`❌ Error al verificar administrador: ${error.message}`);
     return false;
@@ -614,9 +621,17 @@ bot.onText(/\/clean/, async (msg) => {
   const chatId = msg.chat.id.toString();
   const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
 
+  console.log(`📝 Procesando /clean - Chat ID: ${chatId}, Thread ID: ${threadId}`);
+
   // Verificar si el chat y el hilo son válidos
-  if (!GRUPOS_PREDEFINIDOS[chatId]) return;
-  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return;
+  if (!GRUPOS_PREDEFINIDOS[chatId]) {
+    console.log(`⚠️ Chat ${chatId} no está en GRUPOS_PREDEFINIDOS`);
+    return;
+  }
+  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) {
+    console.log(`⚠️ Thread ${threadId} no coincide con ${CANALES_ESPECIFICOS[chatId].thread_id}`);
+    return;
+  }
 
   const userId = msg.from.id;
   const channel = CANALES_ESPECIFICOS[chatId];
@@ -624,6 +639,7 @@ bot.onText(/\/clean/, async (msg) => {
   // Verificar si el usuario es administrador
   const isUserAdmin = await isAdmin(chatId, userId);
   if (!isUserAdmin) {
+    console.log(`🚫 ${userId} no es administrador en ${chatId}`);
     await bot.sendMessage(channel.chat_id, '🚫 Solo los administradores pueden usar este comando.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
     return;
   }
@@ -631,6 +647,7 @@ bot.onText(/\/clean/, async (msg) => {
   try {
     // Obtener la fecha actual
     const now = new Date().toISOString();
+    console.log(`⏰ Fecha actual: ${now}`);
 
     // Consultar enlaces expirados
     const { data: expiredLinks, error: selectError } = await supabaseService
@@ -645,12 +662,14 @@ bot.onText(/\/clean/, async (msg) => {
     }
 
     if (!expiredLinks || expiredLinks.length === 0) {
+      console.log('✅ No hay enlaces expirados para limpiar');
       await bot.sendMessage(channel.chat_id, '✅ No hay enlaces expirados para limpiar.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
       return;
     }
 
     // Eliminar enlaces expirados
     const expiredIds = expiredLinks.map(link => link.id);
+    console.log(`🧹 Enlaces expirados encontrados: ${expiredIds.length}`);
     const { error: deleteError } = await supabaseService
       .from('short_links')
       .delete()
@@ -662,7 +681,7 @@ bot.onText(/\/clean/, async (msg) => {
       return;
     }
 
-    console.log(`✅ ${expiredIds.length} enlaces expirados eliminados de la base de datos.`);
+    console.log(`✅ ${expiredIds.length} enlaces expirados eliminados de la base de datos`);
     await bot.sendMessage(channel.chat_id, `🧹 Se han eliminado ${expiredIds.length} enlaces expirados de la base de datos.${SIGNATURE}`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
   } catch (error) {
     console.error(`❌ Error inesperado en /clean: ${error.message}`);
