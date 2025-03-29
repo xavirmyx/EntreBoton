@@ -221,7 +221,7 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
 
   console.log(`✅ ${results.length} enlaces acortados únicos.`);
   console.log(`📝 Texto formateado: ${formattedText}`);
-  return { formattedText, shortLinks };
+  return { formattedText, shortLinks, urlMap };
 }
 
 // **Verificar si el usuario es administrador**
@@ -308,7 +308,7 @@ bot.on('message', async (msg) => {
     const allShortLinks = [];
 
     if (urls.length) {
-      const { shortLinks } = await structureMessage(text, urls, loadingMsg.message_id, chatId, userId, username);
+      const { shortLinks, urlMap } = await structureMessage(text, urls, loadingMsg.message_id, chatId, userId, username);
       allShortLinks.push(...shortLinks);
     }
 
@@ -318,10 +318,10 @@ bot.on('message', async (msg) => {
     // Procesar cada bloque de evento por separado
     const messagesToSend = eventBlocks.map(block => {
       const blockLines = block.split('\n').filter(line => line.trim());
-      const blockUrls = blockLines.map(line => urls.find(url => line.includes(url))).filter(url => url);
+      const blockUrls = blockLines.map(line => Array.from(urlToShortLink.keys()).find(url => line.includes(url))).filter(url => url);
       const blockShortLinks = blockUrls.map(url => urlToShortLink.get(url)).filter(link => link);
       const formattedBlock = blockLines.map(line => {
-        urls.forEach(url => {
+        blockUrls.forEach(url => {
           if (line.includes(url)) {
             const link = urlToShortLink.get(url);
             if (link) line = line.replace(url, link.replacementPhrase);
@@ -332,10 +332,10 @@ bot.on('message', async (msg) => {
 
       return {
         text: formattedBlock,
-        inlineKeyboard: blockShortLinks.map(link => [{
+        inlineKeyboard: blockShortLinks.map(link => ({
           text: '🔗 Abrir enlace',
           callback_data: link.callbackData
-        }])
+        }))
       };
     });
 
@@ -352,7 +352,7 @@ bot.on('message', async (msg) => {
           message_thread_id: channel.thread_id,
           parse_mode: 'HTML',
           protect_content: true,
-          reply_markup: message.inlineKeyboard.length ? { inline_keyboard: message.inlineKeyboard } : undefined
+          reply_markup: message.inlineKeyboard.length ? { inline_keyboard: [message.inlineKeyboard] } : undefined
         });
         for (let i = 1; i < messageParts.length; i++) {
           await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
@@ -363,7 +363,7 @@ bot.on('message', async (msg) => {
           message_thread_id: channel.thread_id,
           parse_mode: 'HTML',
           protect_content: true,
-          reply_markup: message.inlineKeyboard.length ? { inline_keyboard: message.inlineKeyboard } : undefined
+          reply_markup: message.inlineKeyboard.length ? { inline_keyboard: [message.inlineKeyboard] } : undefined
         });
         for (let i = 1; i < messageParts.length; i++) {
           await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
@@ -374,7 +374,7 @@ bot.on('message', async (msg) => {
           message_thread_id: channel.thread_id,
           parse_mode: 'HTML',
           protect_content: true,
-          reply_markup: message.inlineKeyboard.length ? { inline_keyboard: message.inlineKeyboard } : undefined
+          reply_markup: message.inlineKeyboard.length ? { inline_keyboard: [message.inlineKeyboard] } : undefined
         });
         for (let i = 1; i < messageParts.length; i++) {
           await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', protect_content: true });
@@ -385,7 +385,7 @@ bot.on('message', async (msg) => {
           parse_mode: 'HTML',
           disable_web_page_preview: true,
           protect_content: true,
-          reply_markup: message.inlineKeyboard.length ? { inline_keyboard: message.inlineKeyboard } : undefined
+          reply_markup: message.inlineKeyboard.length ? { inline_keyboard: [message.inlineKeyboard] } : undefined
         });
         for (let i = 1; i < messageParts.length; i++) {
           await bot.sendMessage(channel.chat_id, messageParts[i], { message_thread_id: channel.thread_id, parse_mode: 'HTML', disable_web_page_preview: true, protect_content: true });
@@ -743,4 +743,15 @@ app.get('/redirect/:shortId', async (req, res) => {
     }
 
     console.log(`✅ Redirigiendo a: ${linkData.original_url}`);
-    res.redirec
+    res.redirect(linkData.original_url);
+  } catch (error) {
+    console.error(`❌ Error al procesar la redirección: ${error.message}`);
+    res.status(500).send('Error interno del servidor.');
+  }
+});
+
+// **Configurar webhook y arrancar**
+app.listen(PORT, async () => {
+  console.log(`✅ Servidor en puerto ${PORT}`);
+  await bot.setWebHook(WEBHOOK_URL);
+});
