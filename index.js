@@ -52,7 +52,7 @@ const REDIRECT_BASE_URL = 'https://entreboton.onrender.com/redirect/';
 // Configuración de Supabase (usando variables de entorno)
 const SUPABASE_URL = 'https://ycvkdxzxrzuwnkybmjwf.supabase.co';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4crp1d25reWJtandmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDI4Mjg4NzYsImV4cCI6MjA1ODQwNDg3Nn0.1ts8XIpysbMe5heIg3oWLfqKxReusZxemw4lk2WZ4GI';
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4crp1d25reWJtandmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjgyODg3NiwiZXhwIjoyMDU4NDA0ODc2fQ.q1234567890abcdefghij'; // Reemplaza con tu clave real si no usas variables de entorno
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4crp1d25reWJtandmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjgyODg3NiwiZXhwIjoyMDU4NDA0ODc2fQ.q1234567890abcdefghij';
 
 // Cliente de Supabase con permisos anónimos (para operaciones de lectura)
 const supabaseAnon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -111,18 +111,18 @@ function sanitizeText(text) {
   return text.replace(/[<>&'"]/g, char => ({ '<': '<', '>': '>', '&': '&', "'": '\'', '"': '"' }[char] || char)).trim();
 }
 
-// **Extraer URLs (preservar todas las ocurrencias, incluso duplicados)**
+// **Extraer URLs únicas (evitar duplicados)**
 function extractUrls(msg) {
   const text = msg.text || msg.caption || '';
   const urlRegex = /(https?:\/\/[^\s]+)/g;
-  let urls = [];
+  const urls = new Set(); // Usamos Set para evitar duplicados
   let match;
   while ((match = urlRegex.exec(text)) !== null) {
-    urls.push(match[0]);
+    urls.add(match[0]);
   }
   const entities = msg.entities || msg.caption_entities || [];
-  const entityUrls = entities.filter(e => e.type === 'url').map(e => text.substr(e.offset, e.length));
-  return [...urls, ...entityUrls];
+  entities.filter(e => e.type === 'url').forEach(e => urls.add(text.substr(e.offset, e.length)));
+  return Array.from(urls); // Convertimos el Set a Array
 }
 
 // **Generar token para autenticación (truncado a 32 caracteres)**
@@ -189,19 +189,21 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
   if (!text && !urls.length) return { formattedText: '', shortLinks: [] };
 
   let formattedText = text || '📢 Publicación';
-
   const shortLinks = [];
-  let urlCounter = 0;
+  const urlMap = new Map(); // Para rastrear URLs únicas y sus reemplazos
 
-  console.log(`📝 URLs detectadas: ${urls}`);
+  console.log(`📝 URLs detectadas (únicas): ${urls}`);
   console.log(`📝 Texto original: ${text}`);
 
-  const shortLinksPromises = urls.map(async (url) => {
+  const shortLinksPromises = urls.map(async (url, index) => {
     const shortLink = await shortenUrl(url, messageId, chatId, userId, username);
     if (shortLink) {
       const { shortId, token } = shortLink;
       const callbackData = `click:${shortId}:${token}`;
-      return { index: urlCounter++, url, shortId, token, callbackData };
+      const phraseIndex = index % CUSTOM_PHRASES.length;
+      const replacementPhrase = CUSTOM_PHRASES[phraseIndex];
+      urlMap.set(url, { shortId, token, callbackData, replacementPhrase });
+      return { url, shortId, token, callbackData, replacementPhrase };
     }
     console.warn(`⚠️ No se pudo acortar el enlace: ${url}`);
     return null;
@@ -209,17 +211,15 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
 
   const results = (await Promise.all(shortLinksPromises)).filter(link => link !== null);
 
+  // Reemplazar cada URL en el texto original con su frase correspondiente
   let currentText = formattedText;
-  for (const link of results) {
-    const phraseIndex = link.index % CUSTOM_PHRASES.length;
-    const replacementPhrase = CUSTOM_PHRASES[phraseIndex];
-    currentText = currentText.replace(link.url, replacementPhrase);
-    shortLinks.push(link);
+  for (const [url, { replacementPhrase }] of urlMap) {
+    currentText = currentText.split(url).join(replacementPhrase); // Reemplazo exacto
   }
-
   formattedText = currentText;
+  shortLinks.push(...results);
 
-  console.log(`✅ ${results.length} enlaces acortados.`);
+  console.log(`✅ ${results.length} enlaces acortados únicos.`);
   console.log(`📝 Texto formateado: ${formattedText}`);
   return { formattedText, shortLinks };
 }
@@ -227,8 +227,15 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
 // **Verificar si el usuario es administrador**
 async function isAdmin(chatId, userId) {
   try {
-    const { members } = await bot.getChatAdministrators(chatId);
-    return members.some(member => member.user.id === userId);
+    console.log(`🔍 Verificando si ${userId} es administrador en ${chatId}`);
+    const admins = await bot.getChatAdministrators(chatId);
+    if (!admins || !Array.isArray(admins)) {
+      console.error('❌ Respuesta inválida de getChatAdministrators:', admins);
+      return false;
+    }
+    const isAdminUser = admins.some(member => member.user.id === userId);
+    console.log(`✅ Resultado de verificación: ${isAdminUser}`);
+    return isAdminUser;
   } catch (error) {
     console.error(`❌ Error al verificar administrador: ${error.message}`);
     return false;
@@ -277,8 +284,9 @@ bot.on('message', async (msg) => {
   const userId = msg.from.id.toString();
   const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
 
+  const channel = CANALES_ESPECIFICOS[chatId];
+
   if (bannedUsers.has(userId)) {
-    const channel = CANALES_ESPECIFICOS[chatId];
     await bot.sendMessage(channel.chat_id, `🚫 Lo siento, ${username}, has sido bloqueado por compartir contenido exclusivo. Contacta a un administrador para resolver esto.`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
     return;
   }
@@ -292,7 +300,6 @@ bot.on('message', async (msg) => {
   if (msg.text && msg.text.startsWith('/')) return;
   if (!urls.length && !photo && !video && !animation) return;
 
-  const channel = CANALES_ESPECIFICOS[chatId];
   const loadingMsg = await bot.sendMessage(channel.chat_id, '⏳ Generando publicación...', { message_thread_id: channel.thread_id });
 
   let caption = text || '📢 Publicación';
@@ -376,6 +383,8 @@ bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const messageId = query.message.message_id;
 
+  const channel = CANALES_ESPECIFICOS['-1002348662107']; // Siempre responde en el grupo específico
+
   try {
     const dataParts = callbackData.split(':');
     if (dataParts.length !== 3 || dataParts[0] !== 'click') {
@@ -419,8 +428,8 @@ bot.on('callback_query', async (query) => {
       show_alert: true,
     });
 
-    const redirectMessage = await bot.sendMessage(chatId, `${username}, haz clic para ver el contenido:`, {
-      reply_to_message_id: messageId,
+    const redirectMessage = await bot.sendMessage(channel.chat_id, `${username}, haz clic para ver el contenido:`, {
+      message_thread_id: channel.thread_id,
       parse_mode: 'HTML',
       reply_markup: {
         inline_keyboard: [
@@ -436,7 +445,7 @@ bot.on('callback_query', async (query) => {
 
     setTimeout(async () => {
       try {
-        await bot.deleteMessage(chatId, redirectMessage.message_id);
+        await bot.deleteMessage(channel.chat_id, redirectMessage.message_id);
         console.log(`✅ Mensaje "Haz clic para ver el contenido" eliminado después de 30 segundos.`);
       } catch (error) {
         console.error(`❌ Error al eliminar el mensaje de redirección: ${error.message}`);
@@ -445,9 +454,9 @@ bot.on('callback_query', async (query) => {
   } catch (error) {
     console.error('Error al procesar el callback:', error);
     if (error.code === 'ETELEGRAM' && error.response?.body?.description?.includes('query is too old')) {
-      await bot.sendMessage(chatId, 'Lo siento, el enlace ha expirado. Por favor, intenta de nuevo.');
+      await bot.sendMessage(channel.chat_id, '⚠️ Lo siento, el enlace ha expirado. Por favor, intenta de nuevo.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
     } else {
-      await bot.sendMessage(chatId, 'Ocurrió un error al procesar el enlace. Por favor, intenta de nuevo.');
+      await bot.sendMessage(channel.chat_id, '⚠️ Ocurrió un error al procesar el enlace. Por favor, intenta de nuevo.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
     }
   }
 });
@@ -607,6 +616,75 @@ bot.onText(/\/banuser (\d+)/, async (msg, match) => {
 
   bannedUsers.add(targetUserId);
   await bot.sendMessage(channel.chat_id, `🚫 El usuario con ID ${targetUserId} ha sido bloqueado y no podrá reenviar mensajes.`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+});
+
+// **Comando /clean (solo para administradores)**
+bot.onText(/\/clean/, async (msg) => {
+  const chatId = msg.chat.id.toString();
+  const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
+
+  console.log(`📝 Procesando /clean - Chat ID: ${chatId}, Thread ID: ${threadId}`);
+
+  // Verificar si el chat y el hilo son válidos
+  if (!GRUPOS_PREDEFINIDOS[chatId]) {
+    console.log(`⚠️ Chat ${chatId} no está en GRUPOS_PREDEFINIDOS`);
+    return;
+  }
+  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) {
+    console.log(`⚠️ Thread ${threadId} no coincide con ${CANALES_ESPECIFICOS[chatId].thread_id}`);
+    return;
+  }
+
+  const userId = msg.from.id;
+  const channel = CANALES_ESPECIFICOS[chatId];
+
+  // Verificar si el usuario es administrador
+  const isUserAdmin = await isAdmin(chatId, userId);
+  if (!isUserAdmin) {
+    console.log(`🚫 ${userId} no es administrador en ${chatId}`);
+    await bot.sendMessage(channel.chat_id, '🚫 Solo los administradores pueden usar este comando.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+    return;
+  }
+
+  try {
+    // Consultar enlaces que no pertenecen al canal específico
+    const { data: linksToDelete, error: selectError } = await supabaseService
+      .from('short_links')
+      .select('id')
+      .neq('chat_id', chatId);
+
+    if (selectError) {
+      console.error(`❌ Error al consultar enlaces para eliminar: ${selectError.message}`);
+      await bot.sendMessage(channel.chat_id, '⚠️ Error al buscar enlaces para limpiar.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+      return;
+    }
+
+    if (!linksToDelete || linksToDelete.length === 0) {
+      console.log('✅ No hay enlaces para limpiar fuera del canal');
+      await bot.sendMessage(channel.chat_id, '✅ No hay enlaces para limpiar fuera del canal.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+      return;
+    }
+
+    // Eliminar enlaces encontrados
+    const idsToDelete = linksToDelete.map(link => link.id);
+    console.log(`🧹 Enlaces a eliminar encontrados fuera del canal: ${idsToDelete.length}`);
+    const { error: deleteError } = await supabaseService
+      .from('short_links')
+      .delete()
+      .in('id', idsToDelete);
+
+    if (deleteError) {
+      console.error(`❌ Error al eliminar enlaces: ${deleteError.message}`);
+      await bot.sendMessage(channel.chat_id, '⚠️ Error al limpiar enlaces.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+      return;
+    }
+
+    console.log(`✅ ${idsToDelete.length} enlaces eliminados de la base de datos`);
+    await bot.sendMessage(channel.chat_id, `🧹 Se han eliminado ${idsToDelete.length} enlaces que no pertencen al canal de la base de datos.${SIGNATURE}`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+  } catch (error) {
+    console.error(`❌ Error inesperado en /clean: ${error.message}`);
+    await bot.sendMessage(channel.chat_id, '⚠️ Ocurrió un error inesperado al limpiar los enlaces.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+  }
 });
 
 // **Ruta para manejar el webhook de Telegram**
