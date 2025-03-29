@@ -284,8 +284,9 @@ bot.on('message', async (msg) => {
   const userId = msg.from.id.toString();
   const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
 
+  const channel = CANALES_ESPECIFICOS[chatId];
+
   if (bannedUsers.has(userId)) {
-    const channel = CANALES_ESPECIFICOS[chatId];
     await bot.sendMessage(channel.chat_id, `🚫 Lo siento, ${username}, has sido bloqueado por compartir contenido exclusivo. Contacta a un administrador para resolver esto.`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
     return;
   }
@@ -299,7 +300,6 @@ bot.on('message', async (msg) => {
   if (msg.text && msg.text.startsWith('/')) return;
   if (!urls.length && !photo && !video && !animation) return;
 
-  const channel = CANALES_ESPECIFICOS[chatId];
   const loadingMsg = await bot.sendMessage(channel.chat_id, '⏳ Generando publicación...', { message_thread_id: channel.thread_id });
 
   let caption = text || '📢 Publicación';
@@ -383,6 +383,8 @@ bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const messageId = query.message.message_id;
 
+  const channel = CANALES_ESPECIFICOS['-1002348662107']; // Siempre responde en el grupo específico
+
   try {
     const dataParts = callbackData.split(':');
     if (dataParts.length !== 3 || dataParts[0] !== 'click') {
@@ -426,8 +428,8 @@ bot.on('callback_query', async (query) => {
       show_alert: true,
     });
 
-    const redirectMessage = await bot.sendMessage(chatId, `${username}, haz clic para ver el contenido:`, {
-      reply_to_message_id: messageId,
+    const redirectMessage = await bot.sendMessage(channel.chat_id, `${username}, haz clic para ver el contenido:`, {
+      message_thread_id: channel.thread_id,
       parse_mode: 'HTML',
       reply_markup: {
         inline_keyboard: [
@@ -443,7 +445,7 @@ bot.on('callback_query', async (query) => {
 
     setTimeout(async () => {
       try {
-        await bot.deleteMessage(chatId, redirectMessage.message_id);
+        await bot.deleteMessage(channel.chat_id, redirectMessage.message_id);
         console.log(`✅ Mensaje "Haz clic para ver el contenido" eliminado después de 30 segundos.`);
       } catch (error) {
         console.error(`❌ Error al eliminar el mensaje de redirección: ${error.message}`);
@@ -452,9 +454,9 @@ bot.on('callback_query', async (query) => {
   } catch (error) {
     console.error('Error al procesar el callback:', error);
     if (error.code === 'ETELEGRAM' && error.response?.body?.description?.includes('query is too old')) {
-      await bot.sendMessage(chatId, 'Lo siento, el enlace ha expirado. Por favor, intenta de nuevo.');
+      await bot.sendMessage(channel.chat_id, '⚠️ Lo siento, el enlace ha expirado. Por favor, intenta de nuevo.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
     } else {
-      await bot.sendMessage(chatId, 'Ocurrió un error al procesar el enlace. Por favor, intenta de nuevo.');
+      await bot.sendMessage(channel.chat_id, '⚠️ Ocurrió un error al procesar el enlace. Por favor, intenta de nuevo.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
     }
   }
 });
@@ -645,16 +647,11 @@ bot.onText(/\/clean/, async (msg) => {
   }
 
   try {
-    // Obtener la fecha actual y la fecha límite de 24 horas atrás
-    const now = new Date();
-    const twentyFourHoursAgo = new Date(now - 24 * 60 * 60 * 1000).toISOString();
-    console.log(`⏰ Fecha actual: ${now.toISOString()}, 24h atrás: ${twentyFourHoursAgo}`);
-
-    // Consultar enlaces a eliminar: expirados, más de 24h, o no en el grupo
+    // Consultar enlaces que no pertenecen al canal específico
     const { data: linksToDelete, error: selectError } = await supabaseService
       .from('short_links')
       .select('id')
-      .or(`expires_at.lt.${now.toISOString()},created_at.lt.${twentyFourHoursAgo},chat_id.neq.${chatId}`);
+      .neq('chat_id', chatId);
 
     if (selectError) {
       console.error(`❌ Error al consultar enlaces para eliminar: ${selectError.message}`);
@@ -663,14 +660,14 @@ bot.onText(/\/clean/, async (msg) => {
     }
 
     if (!linksToDelete || linksToDelete.length === 0) {
-      console.log('✅ No hay enlaces para limpiar');
-      await bot.sendMessage(channel.chat_id, '✅ No hay enlaces para limpiar.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+      console.log('✅ No hay enlaces para limpiar fuera del canal');
+      await bot.sendMessage(channel.chat_id, '✅ No hay enlaces para limpiar fuera del canal.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
       return;
     }
 
     // Eliminar enlaces encontrados
     const idsToDelete = linksToDelete.map(link => link.id);
-    console.log(`🧹 Enlaces a eliminar encontrados: ${idsToDelete.length}`);
+    console.log(`🧹 Enlaces a eliminar encontrados fuera del canal: ${idsToDelete.length}`);
     const { error: deleteError } = await supabaseService
       .from('short_links')
       .delete()
@@ -683,7 +680,7 @@ bot.onText(/\/clean/, async (msg) => {
     }
 
     console.log(`✅ ${idsToDelete.length} enlaces eliminados de la base de datos`);
-    await bot.sendMessage(channel.chat_id, `🧹 Se han eliminado ${idsToDelete.length} enlaces (expirados, antiguos o de otros grupos) de la base de datos.${SIGNATURE}`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+    await bot.sendMessage(channel.chat_id, `🧹 Se han eliminado ${idsToDelete.length} enlaces que no pertencen al canal de la base de datos.${SIGNATURE}`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
   } catch (error) {
     console.error(`❌ Error inesperado en /clean: ${error.message}`);
     await bot.sendMessage(channel.chat_id, '⚠️ Ocurrió un error inesperado al limpiar los enlaces.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
