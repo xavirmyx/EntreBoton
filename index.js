@@ -645,44 +645,45 @@ bot.onText(/\/clean/, async (msg) => {
   }
 
   try {
-    // Obtener la fecha actual
-    const now = new Date().toISOString();
-    console.log(`⏰ Fecha actual: ${now}`);
+    // Obtener la fecha actual y la fecha límite de 24 horas atrás
+    const now = new Date();
+    const twentyFourHoursAgo = new Date(now - 24 * 60 * 60 * 1000).toISOString();
+    console.log(`⏰ Fecha actual: ${now.toISOString()}, 24h atrás: ${twentyFourHoursAgo}`);
 
-    // Consultar enlaces expirados
-    const { data: expiredLinks, error: selectError } = await supabaseService
+    // Consultar enlaces a eliminar: expirados, más de 24h, o no en el grupo
+    const { data: linksToDelete, error: selectError } = await supabaseService
       .from('short_links')
       .select('id')
-      .lt('expires_at', now);
+      .or(`expires_at.lt.${now.toISOString()},created_at.lt.${twentyFourHoursAgo},chat_id.neq.${chatId}`);
 
     if (selectError) {
-      console.error(`❌ Error al consultar enlaces expirados: ${selectError.message}`);
-      await bot.sendMessage(channel.chat_id, '⚠️ Error al buscar enlaces expirados.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+      console.error(`❌ Error al consultar enlaces para eliminar: ${selectError.message}`);
+      await bot.sendMessage(channel.chat_id, '⚠️ Error al buscar enlaces para limpiar.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
       return;
     }
 
-    if (!expiredLinks || expiredLinks.length === 0) {
-      console.log('✅ No hay enlaces expirados para limpiar');
-      await bot.sendMessage(channel.chat_id, '✅ No hay enlaces expirados para limpiar.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+    if (!linksToDelete || linksToDelete.length === 0) {
+      console.log('✅ No hay enlaces para limpiar');
+      await bot.sendMessage(channel.chat_id, '✅ No hay enlaces para limpiar.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
       return;
     }
 
-    // Eliminar enlaces expirados
-    const expiredIds = expiredLinks.map(link => link.id);
-    console.log(`🧹 Enlaces expirados encontrados: ${expiredIds.length}`);
+    // Eliminar enlaces encontrados
+    const idsToDelete = linksToDelete.map(link => link.id);
+    console.log(`🧹 Enlaces a eliminar encontrados: ${idsToDelete.length}`);
     const { error: deleteError } = await supabaseService
       .from('short_links')
       .delete()
-      .in('id', expiredIds);
+      .in('id', idsToDelete);
 
     if (deleteError) {
-      console.error(`❌ Error al eliminar enlaces expirados: ${deleteError.message}`);
-      await bot.sendMessage(channel.chat_id, '⚠️ Error al limpiar enlaces expirados.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+      console.error(`❌ Error al eliminar enlaces: ${deleteError.message}`);
+      await bot.sendMessage(channel.chat_id, '⚠️ Error al limpiar enlaces.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
       return;
     }
 
-    console.log(`✅ ${expiredIds.length} enlaces expirados eliminados de la base de datos`);
-    await bot.sendMessage(channel.chat_id, `🧹 Se han eliminado ${expiredIds.length} enlaces expirados de la base de datos.${SIGNATURE}`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+    console.log(`✅ ${idsToDelete.length} enlaces eliminados de la base de datos`);
+    await bot.sendMessage(channel.chat_id, `🧹 Se han eliminado ${idsToDelete.length} enlaces (expirados, antiguos o de otros grupos) de la base de datos.${SIGNATURE}`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
   } catch (error) {
     console.error(`❌ Error inesperado en /clean: ${error.message}`);
     await bot.sendMessage(channel.chat_id, '⚠️ Ocurrió un error inesperado al limpiar los enlaces.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
