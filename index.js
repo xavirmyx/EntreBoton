@@ -52,7 +52,7 @@ const REDIRECT_BASE_URL = 'https://entreboton.onrender.com/redirect/';
 // Configuración de Supabase (usando variables de entorno)
 const SUPABASE_URL = 'https://ycvkdxzxrzuwnkybmjwf.supabase.co';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4crp1d25reWJtandmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDI4Mjg4NzYsImV4cCI6MjA1ODQwNDg3Nn0.1ts8XIpysbMe5heIg3oWLfqKxReusZxemw4lk2WZ4GI';
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4crp1d25reWJtandmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjgyODg3NiwiZXhwIjoyMDU4NDA0ODc2fQ.q1234567890abcdefghij';
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4crp1d25reWJtandmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjgyODg3NiwiZXhwIjoyMDU4NDA0ODc2fQ.q1234567890abcdefghij'; // Reemplaza con tu clave real si no usas variables de entorno
 
 // Cliente de Supabase con permisos anónimos (para operaciones de lectura)
 const supabaseAnon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -111,18 +111,18 @@ function sanitizeText(text) {
   return text.replace(/[<>&'"]/g, char => ({ '<': '<', '>': '>', '&': '&', "'": '\'', '"': '"' }[char] || char)).trim();
 }
 
-// **Extraer URLs únicas (evitar duplicados)**
+// **Extraer URLs (preservar todas las ocurrencias, incluso duplicados)**
 function extractUrls(msg) {
   const text = msg.text || msg.caption || '';
   const urlRegex = /(https?:\/\/[^\s]+)/g;
-  const urls = new Set(); // Usamos Set para evitar duplicados
+  let urls = [];
   let match;
   while ((match = urlRegex.exec(text)) !== null) {
-    urls.add(match[0]);
+    urls.push(match[0]);
   }
   const entities = msg.entities || msg.caption_entities || [];
-  entities.filter(e => e.type === 'url').forEach(e => urls.add(text.substr(e.offset, e.length)));
-  return Array.from(urls); // Convertimos el Set a Array
+  const entityUrls = entities.filter(e => e.type === 'url').map(e => text.substr(e.offset, e.length));
+  return [...urls, ...entityUrls];
 }
 
 // **Generar token para autenticación (truncado a 32 caracteres)**
@@ -189,21 +189,19 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
   if (!text && !urls.length) return { formattedText: '', shortLinks: [] };
 
   let formattedText = text || '📢 Publicación';
-  const shortLinks = [];
-  const urlMap = new Map(); // Para rastrear URLs únicas y sus reemplazos
 
-  console.log(`📝 URLs detectadas (únicas): ${urls}`);
+  const shortLinks = [];
+  let urlCounter = 0;
+
+  console.log(`📝 URLs detectadas: ${urls}`);
   console.log(`📝 Texto original: ${text}`);
 
-  const shortLinksPromises = urls.map(async (url, index) => {
+  const shortLinksPromises = urls.map(async (url) => {
     const shortLink = await shortenUrl(url, messageId, chatId, userId, username);
     if (shortLink) {
       const { shortId, token } = shortLink;
       const callbackData = `click:${shortId}:${token}`;
-      const phraseIndex = index % CUSTOM_PHRASES.length;
-      const replacementPhrase = CUSTOM_PHRASES[phraseIndex];
-      urlMap.set(url, { shortId, token, callbackData, replacementPhrase });
-      return { url, shortId, token, callbackData, replacementPhrase };
+      return { index: urlCounter++, url, shortId, token, callbackData };
     }
     console.warn(`⚠️ No se pudo acortar el enlace: ${url}`);
     return null;
@@ -211,15 +209,17 @@ async function structureMessage(text, urls, messageId, chatId, userId, username)
 
   const results = (await Promise.all(shortLinksPromises)).filter(link => link !== null);
 
-  // Reemplazar cada URL en el texto original con su frase correspondiente
   let currentText = formattedText;
-  for (const [url, { replacementPhrase }] of urlMap) {
-    currentText = currentText.split(url).join(replacementPhrase); // Reemplazo exacto
+  for (const link of results) {
+    const phraseIndex = link.index % CUSTOM_PHRASES.length;
+    const replacementPhrase = CUSTOM_PHRASES[phraseIndex];
+    currentText = currentText.replace(link.url, replacementPhrase);
+    shortLinks.push(link);
   }
-  formattedText = currentText;
-  shortLinks.push(...results);
 
-  console.log(`✅ ${results.length} enlaces acortados únicos.`);
+  formattedText = currentText;
+
+  console.log(`✅ ${results.length} enlaces acortados.`);
   console.log(`📝 Texto formateado: ${formattedText}`);
   return { formattedText, shortLinks };
 }
