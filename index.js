@@ -609,6 +609,67 @@ bot.onText(/\/banuser (\d+)/, async (msg, match) => {
   await bot.sendMessage(channel.chat_id, `🚫 El usuario con ID ${targetUserId} ha sido bloqueado y no podrá reenviar mensajes.`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
 });
 
+// **Comando /clean (solo para administradores)**
+bot.onText(/\/clean/, async (msg) => {
+  const chatId = msg.chat.id.toString();
+  const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
+
+  // Verificar si el chat y el hilo son válidos
+  if (!GRUPOS_PREDEFINIDOS[chatId]) return;
+  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return;
+
+  const userId = msg.from.id;
+  const channel = CANALES_ESPECIFICOS[chatId];
+
+  // Verificar si el usuario es administrador
+  const isUserAdmin = await isAdmin(chatId, userId);
+  if (!isUserAdmin) {
+    await bot.sendMessage(channel.chat_id, '🚫 Solo los administradores pueden usar este comando.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+    return;
+  }
+
+  try {
+    // Obtener la fecha actual
+    const now = new Date().toISOString();
+
+    // Consultar enlaces expirados
+    const { data: expiredLinks, error: selectError } = await supabaseService
+      .from('short_links')
+      .select('id')
+      .lt('expires_at', now);
+
+    if (selectError) {
+      console.error(`❌ Error al consultar enlaces expirados: ${selectError.message}`);
+      await bot.sendMessage(channel.chat_id, '⚠️ Error al buscar enlaces expirados.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+      return;
+    }
+
+    if (!expiredLinks || expiredLinks.length === 0) {
+      await bot.sendMessage(channel.chat_id, '✅ No hay enlaces expirados para limpiar.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+      return;
+    }
+
+    // Eliminar enlaces expirados
+    const expiredIds = expiredLinks.map(link => link.id);
+    const { error: deleteError } = await supabaseService
+      .from('short_links')
+      .delete()
+      .in('id', expiredIds);
+
+    if (deleteError) {
+      console.error(`❌ Error al eliminar enlaces expirados: ${deleteError.message}`);
+      await bot.sendMessage(channel.chat_id, '⚠️ Error al limpiar enlaces expirados.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+      return;
+    }
+
+    console.log(`✅ ${expiredIds.length} enlaces expirados eliminados de la base de datos.`);
+    await bot.sendMessage(channel.chat_id, `🧹 Se han eliminado ${expiredIds.length} enlaces expirados de la base de datos.${SIGNATURE}`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+  } catch (error) {
+    console.error(`❌ Error inesperado en /clean: ${error.message}`);
+    await bot.sendMessage(channel.chat_id, '⚠️ Ocurrió un error inesperado al limpiar los enlaces.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+  }
+});
+
 // **Ruta para manejar el webhook de Telegram**
 app.post('/webhook', (req, res) => {
   bot.processUpdate(req.body);
