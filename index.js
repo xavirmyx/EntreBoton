@@ -743,15 +743,4 @@ app.get('/redirect/:shortId', async (req, res) => {
     }
 
     console.log(`✅ Redirigiendo a: ${linkData.original_url}`);
-    res.redirect(linkData.original_url);
-  } catch (error) {
-    console.error(`❌ Error al procesar la redirección: ${error.message}`);
-    res.status(500).send('Error interno del servidor.');
-  }
-});
-
-// **Configurar webhook y arrancar**
-app.listen(PORT, async () => {
-  console.log(`✅ Servidor en puerto ${PORT}`);
-  await bot.setWebHook(WEBHOOK_URL);
-});
+    res.redirec
