@@ -303,68 +303,58 @@ bot.on('message', async (msg) => {
   const loadingMsg = await bot.sendMessage(channel.chat_id, '⏳ Generando publicación...', { message_thread_id: channel.thread_id });
 
   try {
-    // Dividir el texto en bloques de eventos (separados por líneas en blanco o títulos)
+    // Dividir el texto en bloques de eventos basados en líneas de tiempo (formato "HH:MM")
     const lines = text.split('\n').filter(line => line.trim());
     const eventBlocks = [];
-    let currentBlock = { text: [], urls: [] };
-    let isFirstLine = true;
+    let currentBlock = { title: '', urls: [] };
 
-    // Agrupar las líneas en bloques basados en la estructura esperada
-    for (const line of lines) {
-      // Si la línea comienza con un emoji (como 🏀), asumimos que es un nuevo título
-      if (line.match(/^[^\w\s]/) && isFirstLine) {
-        if (currentBlock.text.length) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      // Si la línea comienza con un formato de hora (ej. "15:00"), es el inicio de un nuevo bloque
+      if (line.match(/^\d{2}:\d{2}/)) {
+        if (currentBlock.title || currentBlock.urls.length) {
           eventBlocks.push(currentBlock);
-          currentBlock = { text: [], urls: [] };
         }
-        currentBlock.text.push(line);
-        isFirstLine = false;
-      } else if (line.match(/^(https?:\/\/[^\s]+)/)) {
-        // Si la línea es una URL, la agregamos a las URLs del bloque actual
+        currentBlock = { title: line, urls: [] };
+      } else if (line.match(/^https?:\/\//)) {
+        // Si la línea es una URL, la añadimos al bloque actual
         currentBlock.urls.push(line);
       } else {
-        // Si la línea no es una URL ni un título, es parte del contenido del bloque
-        currentBlock.text.push(line);
+        // Si no es una URL ni una hora, la concatenamos al título
+        currentBlock.title += `\n${line}`;
       }
     }
 
     // Agregar el último bloque si tiene contenido
-    if (currentBlock.text.length || currentBlock.urls.length) {
+    if (currentBlock.title || currentBlock.urls.length) {
       eventBlocks.push(currentBlock);
     }
 
-    const allShortLinks = [];
-
-    if (urls.length) {
-      const { shortLinks } = await structureMessage(text, urls, loadingMsg.message_id, chatId, userId, username);
-      allShortLinks.push(...shortLinks);
-    }
-
-    // Mapear URLs a sus shortLinks
-    const urlToShortLink = new Map(allShortLinks.map(link => [link.url, link]));
+    const allUrls = urls; // Todas las URLs del mensaje original
+    const { formattedText: fullText, shortLinks } = await structureMessage(text, allUrls, loadingMsg.message_id, chatId, userId, username);
+    const urlToShortLink = new Map(shortLinks.map(link => [link.url, link]));
 
     // Procesar cada bloque de evento
     const messagesToSend = eventBlocks.map(block => {
-      // Formatear el texto del bloque, reemplazando URLs por frases personalizadas
-      let formattedText = block.text.join('\n');
+      let formattedText = block.title.trim();
       const blockUrls = block.urls.filter(url => urlToShortLink.has(url));
       const blockShortLinks = blockUrls.map(url => urlToShortLink.get(url)).filter(link => link);
 
-      blockUrls.forEach(url => {
+      blockUrls.forEach((url, index) => {
         const link = urlToShortLink.get(url);
         if (link) {
           formattedText = formattedText.split(url).join(link.replacementPhrase);
         }
       });
 
-      // Agregar la firma y la advertencia al final del bloque
       formattedText += `${SIGNATURE}${WARNING_MESSAGE}`;
 
-      // Agrupar todos los enlaces del bloque en un solo teclado inline
-      const inlineKeyboard = blockShortLinks.length ? [blockShortLinks.map(link => ({
-        text: '🔗 Abrir enlace',
-        callback_data: link.callbackData
-      }))] : [];
+      const inlineKeyboard = blockShortLinks.length ? [
+        blockShortLinks.map((link, index) => ({
+          text: `🔗 Botón ${index + 1}`,
+          callback_data: link.callbackData
+        }))
+      ] : [];
 
       return {
         text: formattedText,
@@ -374,13 +364,12 @@ bot.on('message', async (msg) => {
 
     await bot.deleteMessage(channel.chat_id, loadingMsg.message_id);
 
-    // Enviar cada bloque de evento como un mensaje completo
+    // Enviar cada bloque de evento como un mensaje separado
     for (let i = 0; i < messagesToSend.length; i++) {
       const message = messagesToSend[i];
       const messageParts = splitMessage(message.text);
       let sentMessage;
 
-      // Si hay multimedia, adjuntarla solo al primer bloque
       if (i === 0 && (photo || video || animation)) {
         if (photo) {
           sentMessage = await bot.sendPhoto(channel.chat_id, photo, {
@@ -408,7 +397,6 @@ bot.on('message', async (msg) => {
           });
         }
 
-        // Enviar las partes restantes del mensaje si las hay
         for (let j = 1; j < messageParts.length; j++) {
           await bot.sendMessage(channel.chat_id, messageParts[j], {
             message_thread_id: channel.thread_id,
@@ -417,7 +405,6 @@ bot.on('message', async (msg) => {
           });
         }
       } else {
-        // Enviar el bloque como mensaje de texto
         sentMessage = await bot.sendMessage(channel.chat_id, messageParts[0], {
           message_thread_id: channel.thread_id,
           parse_mode: 'HTML',
@@ -426,7 +413,6 @@ bot.on('message', async (msg) => {
           reply_markup: message.inlineKeyboard.length ? { inline_keyboard: message.inlineKeyboard } : undefined
         });
 
-        // Enviar las partes restantes del mensaje si las hay
         for (let j = 1; j < messageParts.length; j++) {
           await bot.sendMessage(channel.chat_id, messageParts[j], {
             message_thread_id: channel.thread_id,
@@ -442,6 +428,7 @@ bot.on('message', async (msg) => {
     }
   } catch (error) {
     console.error(`❌ Error al procesar mensaje: ${error.message}`);
+    await bot.deleteMessage(channel.chat_id, loadingMsg.message_id);
     await bot.sendMessage(channel.chat_id, '⚠️ Error al generar publicación.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
   }
 });
@@ -452,7 +439,7 @@ bot.on('callback_query', async (query) => {
   const callbackData = query.data;
   const username = query.from.username ? `@${query.from.username}` : query.from.first_name;
   const chatId = query.message.chat.id;
-  const messageId = query.message.message_id;
+  const message tip = query.message.message_id;
 
   const channel = CANALES_ESPECIFICOS['-1002348662107']; // Siempre responde en el grupo específico
 
@@ -567,7 +554,7 @@ bot.on('message', async (msg) => {
     await bot.deleteMessage(msg.chat.id, msg.message_id);
     await bot.sendMessage(msg.chat.id, `🚫 Mensaje eliminado por compartir contenido exclusivo, ${username}.`, { parse_mode: 'HTML' });
   } catch (error) {
-    console.error(`❌ No se pudo eliminar el mensaje: ${error.message}`);
+    console.error(`❌ No se pudo eliminar el BARRA mensaje: ${error.message}`);
   }
 
   const { error } = await supabaseService.from('interactions').insert([{
@@ -696,7 +683,6 @@ bot.onText(/\/clean/, async (msg) => {
 
   console.log(`📝 Procesando /clean - Chat ID: ${chatId}, Thread ID: ${threadId}`);
 
-  // Verificar si el chat y el hilo son válidos
   if (!GRUPOS_PREDEFINIDOS[chatId]) {
     console.log(`⚠️ Chat ${chatId} no está en GRUPOS_PREDEFINIDOS`);
     return;
@@ -709,7 +695,6 @@ bot.onText(/\/clean/, async (msg) => {
   const userId = msg.from.id;
   const channel = CANALES_ESPECIFICOS[chatId];
 
-  // Verificar si el usuario es administrador
   const isUserAdmin = await isAdmin(chatId, userId);
   if (!isUserAdmin) {
     console.log(`🚫 ${userId} no es administrador en ${chatId}`);
@@ -718,7 +703,6 @@ bot.onText(/\/clean/, async (msg) => {
   }
 
   try {
-    // Consultar enlaces que no pertenecen al canal específico
     const { data: linksToDelete, error: selectError } = await supabaseService
       .from('short_links')
       .select('id')
@@ -736,7 +720,6 @@ bot.onText(/\/clean/, async (msg) => {
       return;
     }
 
-    // Eliminar enlaces encontrados
     const idsToDelete = linksToDelete.map(link => link.id);
     console.log(`🧹 Enlaces a eliminar encontrados fuera del canal: ${idsToDelete.length}`);
     const { error: deleteError } = await supabaseService
