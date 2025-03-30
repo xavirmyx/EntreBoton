@@ -703,11 +703,13 @@ bot.onText(/\/clean/, async (msg) => {
   }
 
   try {
-    // Seleccionar todos los enlaces que NO pertenezcan al canal específico
+    const now = new Date().toISOString(); // Fecha actual en formato ISO
+
+    // Seleccionar todos los enlaces que NO pertenezcan al canal específico O que estén expirados
     const { data: linksToDelete, error: selectError } = await supabaseService
       .from('short_links')
-      .select('id')
-      .neq('chat_id', '-1002348662107'); // Especificamos explícitamente el chat_id del canal
+      .select('id, chat_id, expires_at')
+      .or(`chat_id.neq.-1002348662107,expires_at.lt.${now}`);
 
     if (selectError) {
       console.error(`❌ Error al consultar enlaces para eliminar: ${selectError.message}`);
@@ -716,15 +718,18 @@ bot.onText(/\/clean/, async (msg) => {
     }
 
     if (!linksToDelete || linksToDelete.length === 0) {
-      console.log('✅ No hay enlaces para limpiar fuera del canal');
-      await bot.sendMessage(channel.chat_id, '✅ No hay enlaces para limpiar fuera del canal.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+      console.log('✅ No hay enlaces para limpiar (ni fuera del canal ni expirados)');
+      await bot.sendMessage(channel.chat_id, '✅ No hay enlaces para limpiar (ni fuera del canal ni expirados).', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
       return;
     }
 
     const idsToDelete = linksToDelete.map(link => link.id);
-    console.log(`🧹 Enlaces a eliminar encontrados fuera del canal: ${idsToDelete.length}`);
+    const expiredCount = linksToDelete.filter(link => new Date(link.expires_at) < new Date(now)).length;
+    const outsideChannelCount = linksToDelete.filter(link => link.chat_id !== '-1002348662107').length;
 
-    // Eliminar los enlaces que no pertenecen al canal
+    console.log(`🧹 Enlaces a eliminar encontrados: ${idsToDelete.length} (Expirados: ${expiredCount}, Fuera del canal: ${outsideChannelCount})`);
+
+    // Eliminar los enlaces seleccionados
     const { error: deleteError } = await supabaseService
       .from('short_links')
       .delete()
@@ -737,7 +742,7 @@ bot.onText(/\/clean/, async (msg) => {
     }
 
     console.log(`✅ ${idsToDelete.length} enlaces eliminados de la base de datos`);
-    await bot.sendMessage(channel.chat_id, `🧹 Se han eliminado ${idsToDelete.length} enlaces que no pertenecen al canal de la base de datos.${SIGNATURE}`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+    await bot.sendMessage(channel.chat_id, `🧹 Se han eliminado ${idsToDelete.length} enlaces de la base de datos (${expiredCount} expirados, ${outsideChannelCount} fuera del canal).${SIGNATURE}`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
   } catch (error) {
     console.error(`❌ Error inesperado en /clean: ${error.message}`);
     await bot.sendMessage(channel.chat_id, '⚠️ Ocurrió un error inesperado al limpiar los enlaces.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
