@@ -85,19 +85,6 @@ const CANALES_ESPECIFICOS = { '-1002348662107': { chat_id: '-1002348662107', thr
 // Mapa para almacenar orígenes de mensajes
 const messageOrigins = new Map();
 
-// Lista de usuarios bloqueados (almacenada en memoria, podrías moverla a Supabase para persistencia)
-const bannedUsers = new Set();
-
-// Registro de reenvíos por usuario (para bloqueo automático)
-const forwardCounts = new Map();
-
-// Estadísticas del bot (almacenadas en memoria, podrías moverlas a Supabase para persistencia)
-const stats = {
-  messagesProcessed: 0,
-  forwardsDetected: 0,
-  clicksTracked: 0
-};
-
 // Crear el bot con webhook
 const bot = new TelegramBot(TOKEN, { polling: false });
 
@@ -159,7 +146,6 @@ async function shortenUrl(originalUrl, messageId, chatId, userId, username, expi
     return null;
   }
   console.log(`✅ Enlace acortado guardado en Supabase: ${shortId}`);
-  stats.clicksTracked++;
   return { shortId, token };
 }
 
@@ -259,14 +245,6 @@ Soy un bot diseñado para proteger el contenido exclusivo de este grupo. Aquí t
 📌 <b>Proteger enlaces:</b> Convierto los enlaces en enlaces acortados y protegidos que expiran después de 24 horas.
 📸 <b>Proteger multimedia:</b> Evito que las fotos, videos y GIFs sean reenviados.
 🚨 <b>Detectar reenvíos:</b> Si alguien reenvía un mensaje exclusivo, lo detectaré y notificaré al grupo.
-📊 <b>Ver interacciones:</b> Usa /visto para ver quién ha interactuado con los mensajes.
-📊 <b>Ver clics:</b> Usa /clics para ver quién ha hecho clic en los enlaces.
-
-<b>Comandos útiles:</b>
-/visto - Ver interacciones (reenvíos).
-/clics - Ver clics en enlaces.
-/stats - Ver estadísticas del bot.
-/banuser <user_id> - (Admins) Bloquear a un usuario para que no pueda reenviar mensajes.
 
 ¡Envía un enlace, foto, video o GIF para empezar! 🚀
   `;
@@ -283,13 +261,9 @@ bot.on('message', async (msg) => {
 
   const userId = msg.from.id.toString();
   const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
+  const originalMessageId = msg.message_id; // Guardar el ID del mensaje original
 
   const channel = CANALES_ESPECIFICOS[chatId];
-
-  if (bannedUsers.has(userId)) {
-    await bot.sendMessage(channel.chat_id, `🚫 Lo siento, ${username}, has sido bloqueado por compartir contenido exclusivo. Contacta a un administrador para resolver esto.`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
-    return;
-  }
 
   const text = sanitizeText(msg.text || msg.caption);
   const urls = extractUrls(msg);
@@ -310,31 +284,26 @@ bot.on('message', async (msg) => {
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
-      // Si la línea comienza con un formato de hora (ej. "15:00"), es el inicio de un nuevo bloque
       if (line.match(/^\d{2}:\d{2}/)) {
         if (currentBlock.title || currentBlock.urls.length) {
           eventBlocks.push(currentBlock);
         }
         currentBlock = { title: line, urls: [] };
       } else if (line.match(/^https?:\/\//)) {
-        // Si la línea es una URL, la añadimos al bloque actual
         currentBlock.urls.push(line);
       } else {
-        // Si no es una URL ni una hora, la concatenamos al título
         currentBlock.title += `\n${line}`;
       }
     }
 
-    // Agregar el último bloque si tiene contenido
     if (currentBlock.title || currentBlock.urls.length) {
       eventBlocks.push(currentBlock);
     }
 
-    const allUrls = urls; // Todas las URLs del mensaje original
+    const allUrls = urls;
     const { formattedText: fullText, shortLinks } = await structureMessage(text, allUrls, loadingMsg.message_id, chatId, userId, username);
     const urlToShortLink = new Map(shortLinks.map(link => [link.url, link]));
 
-    // Procesar cada bloque de evento
     const messagesToSend = eventBlocks.map(block => {
       let formattedText = block.title.trim();
       const blockUrls = block.urls.filter(url => urlToShortLink.has(url));
@@ -424,8 +393,11 @@ bot.on('message', async (msg) => {
       }
 
       messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: message.text });
-      stats.messagesProcessed++;
     }
+
+    // Eliminar el mensaje original después de procesarlo
+    await bot.deleteMessage(chatId, originalMessageId);
+    console.log(`✅ Mensaje original (ID: ${originalMessageId}) eliminado después de procesar`);
   } catch (error) {
     console.error(`❌ Error al procesar mensaje: ${error.message}`);
     await bot.deleteMessage(channel.chat_id, loadingMsg.message_id);
@@ -438,10 +410,8 @@ bot.on('callback_query', async (query) => {
   const callbackQueryId = query.id;
   const callbackData = query.data;
   const username = query.from.username ? `@${query.from.username}` : query.from.first_name;
-  const chatId = query.message.chat.id;
-  const messageId = query.message.message_id;
 
-  const channel = CANALES_ESPECIFICOS['-1002348662107']; // Siempre responde en el grupo específico
+  const channel = CANALES_ESPECIFICOS['-1002348662107'];
 
   try {
     const dataParts = callbackData.split(':');
@@ -490,14 +460,7 @@ bot.on('callback_query', async (query) => {
       message_thread_id: channel.thread_id,
       parse_mode: 'HTML',
       reply_markup: {
-        inline_keyboard: [
-          [
-            {
-              text: 'Abrir enlace',
-              url: redirectUrl,
-            },
-          ],
-        ],
+        inline_keyboard: [[{ text: 'Abrir enlace', url: redirectUrl }]],
       },
     });
 
@@ -528,7 +491,6 @@ bot.on('message', async (msg) => {
 
   const forwardedMessageId = msg.forward_from_message_id;
   const forwardedByUser = msg.from;
-  const userId = forwardedByUser.id.toString();
   const username = forwardedByUser.username ? `@${forwardedByUser.username}` : forwardedByUser.first_name;
 
   const forwardedFrom = msg.forward_from || msg.forward_from_chat;
@@ -539,14 +501,6 @@ bot.on('message', async (msg) => {
   const origin = messageOrigins.get(forwardedMessageId) || { chat_id: chatId };
   const originalChatId = origin.chat_id;
   const channel = CANALES_ESPECIFICOS[originalChatId];
-
-  const currentCount = (forwardCounts.get(userId) || 0) + 1;
-  forwardCounts.set(userId, currentCount);
-
-  if (currentCount > 3) {
-    bannedUsers.add(userId);
-    await bot.sendMessage(channel.chat_id, `🚫 ${username} ha sido bloqueado automáticamente por reenviar mensajes exclusivos repetidamente.`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
-  }
 
   await bot.sendMessage(channel.chat_id, `🚨 ${username} reenvió un mensaje exclusivo a ${msg.chat.title || msg.chat.id}!`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
 
@@ -561,7 +515,7 @@ bot.on('message', async (msg) => {
     type: 'forward',
     chat_id: originalChatId,
     message_id: forwardedMessageId,
-    user_id: userId,
+    user_id: forwardedByUser.id.toString(),
     username,
     timestamp: new Date().toISOString(),
     details: `Reenviado a: ${msg.chat.id}`
@@ -571,109 +525,6 @@ bot.on('message', async (msg) => {
   } else {
     console.log(`✅ Reenvío registrado en Supabase: ${username} reenvió mensaje ${forwardedMessageId}`);
   }
-  stats.forwardsDetected++;
-});
-
-// **Comando /visto**
-bot.onText(/\/visto/, async (msg) => {
-  const chatId = msg.chat.id.toString();
-  const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
-
-  if (!GRUPOS_PREDEFINIDOS[chatId]) return;
-  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return;
-
-  const channel = CANALES_ESPECIFICOS[chatId];
-  const { data, error } = await supabaseAnon
-    .from('interactions')
-    .select(`
-      *,
-      timestamp (timestamp AT TIME ZONE 'Europe/Madrid' AS timestamp_local)
-    `)
-    .eq('chat_id', chatId);
-  if (error) {
-    console.error(`❌ Error al obtener interacciones: ${error.message}`);
-    return bot.sendMessage(channel.chat_id, '⚠️ Error al obtener interacciones.', { message_thread_id: channel.thread_id });
-  }
-
-  if (!data.length) return bot.sendMessage(channel.chat_id, '📊 No hay interacciones registradas.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
-  let response = '<b>📊 Interacciones:</b>\n\n';
-  data.forEach(r => {
-    response += `<b>ID:</b> ${r.message_id}\n<b>Acción:</b> ${r.type}\n<b>Usuario:</b> ${r.username || 'Desconocido'}\n<b>Hora:</b> ${new Date(r.timestamp_local).toLocaleString('es-ES')}\n<b>Detalles:</b> ${r.details}\n\n`;
-  });
-  await bot.sendMessage(channel.chat_id, response, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
-});
-
-// **Comando /clics**
-bot.onText(/\/clics/, async (msg) => {
-  const chatId = msg.chat.id.toString();
-  const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
-
-  if (!GRUPOS_PREDEFINIDOS[chatId]) return;
-  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return;
-
-  const channel = CANALES_ESPECIFICOS[chatId];
-  const { data, error } = await supabaseAnon
-    .from('clicks')
-    .select(`
-      *,
-      clicked_at (clicked_at AT TIME ZONE 'Europe/Madrid' AS clicked_at_local),
-      created_at (created_at AT TIME ZONE 'Europe/Madrid' AS created_at_local)
-    `);
-  if (error) {
-    console.error(`❌ Error al obtener clics: ${error.message}`);
-    return bot.sendMessage(channel.chat_id, '⚠️ Error al obtener clics.', { message_thread_id: channel.thread_id });
-  }
-
-  if (!data.length) return bot.sendMessage(channel.chat_id, '📊 No hay clics registrados.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
-  let response = '<b>📊 Clics:</b>\n\n';
-  data.forEach(r => {
-    response += `<b>ID:</b> ${r.id}\n<b>Short Code:</b> ${r.short_code}\n<b>Usuario:</b> ${r.username || 'Desconocido'}\n<b>Hora de Clic:</b> ${new Date(r.clicked_at_local).toLocaleString('es-ES')}\n<b>Creado:</b> ${new Date(r.created_at_local).toLocaleString('es-ES')}\n\n`;
-  });
-  await bot.sendMessage(channel.chat_id, response, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
-});
-
-// **Comando /stats**
-bot.onText(/\/stats/, async (msg) => {
-  const chatId = msg.chat.id.toString();
-  const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
-
-  if (!GRUPOS_PREDEFINIDOS[chatId]) return;
-  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return;
-
-  const channel = CANALES_ESPECIFICOS[chatId];
-  const statsMessage = `
-<b>📈 Estadísticas de EntresHijos:</b>
-
-📩 <b>Mensajes procesados:</b> ${stats.messagesProcessed}
-🚨 <b>Reenvíos detectados:</b> ${stats.forwardsDetected}
-🔗 <b>Clics rastreados:</b> ${stats.clicksTracked}
-🚫 <b>Usuarios bloqueados:</b> ${bannedUsers.size}
-
-¡Gracias por usar EntresHijos! ✨
-  `;
-  await bot.sendMessage(channel.chat_id, statsMessage, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
-});
-
-// **Comando /banuser (solo para administradores)**
-bot.onText(/\/banuser (\d+)/, async (msg, match) => {
-  const chatId = msg.chat.id.toString();
-  const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
-
-  if (!GRUPOS_PREDEFINIDOS[chatId]) return;
-  if (threadId !== CANALES_ESPECIFICOS[chatId].thread_id) return;
-
-  const userId = msg.from.id;
-  const targetUserId = match[1];
-  const channel = CANALES_ESPECIFICOS[chatId];
-
-  const isUserAdmin = await isAdmin(chatId, userId);
-  if (!isUserAdmin) {
-    await bot.sendMessage(channel.chat_id, '🚫 Solo los administradores pueden usar este comando.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
-    return;
-  }
-
-  bannedUsers.add(targetUserId);
-  await bot.sendMessage(channel.chat_id, `🚫 El usuario con ID ${targetUserId} ha sido bloqueado y no podrá reenviar mensajes.`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
 });
 
 // **Comando /clean (solo para administradores)**
@@ -703,9 +554,8 @@ bot.onText(/\/clean/, async (msg) => {
   }
 
   try {
-    const now = new Date().toISOString(); // Fecha actual en formato ISO
+    const now = new Date().toISOString();
 
-    // Seleccionar todos los enlaces que NO pertenezcan al canal específico O que estén expirados
     const { data: linksToDelete, error: selectError } = await supabaseService
       .from('short_links')
       .select('id, chat_id, expires_at')
@@ -729,7 +579,6 @@ bot.onText(/\/clean/, async (msg) => {
 
     console.log(`🧹 Enlaces a eliminar encontrados: ${idsToDelete.length} (Expirados: ${expiredCount}, Fuera del canal: ${outsideChannelCount})`);
 
-    // Eliminar los enlaces seleccionados
     const { error: deleteError } = await supabaseService
       .from('short_links')
       .delete()
