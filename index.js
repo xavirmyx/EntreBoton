@@ -304,7 +304,35 @@ bot.on('message', async (msg) => {
 
   try {
     // Dividir el texto en bloques de eventos (separados por líneas en blanco o títulos)
-    const eventBlocks = text.split(/\n\s*\n/).filter(block => block.trim());
+    const lines = text.split('\n').filter(line => line.trim());
+    const eventBlocks = [];
+    let currentBlock = { text: [], urls: [] };
+    let isFirstLine = true;
+
+    // Agrupar las líneas en bloques basados en la estructura esperada
+    for (const line of lines) {
+      // Si la línea comienza con un emoji (como 🏀), asumimos que es un nuevo título
+      if (line.match(/^[^\w\s]/) && isFirstLine) {
+        if (currentBlock.text.length) {
+          eventBlocks.push(currentBlock);
+          currentBlock = { text: [], urls: [] };
+        }
+        currentBlock.text.push(line);
+        isFirstLine = false;
+      } else if (line.match(/^(https?:\/\/[^\s]+)/)) {
+        // Si la línea es una URL, la agregamos a las URLs del bloque actual
+        currentBlock.urls.push(line);
+      } else {
+        // Si la línea no es una URL ni un título, es parte del contenido del bloque
+        currentBlock.text.push(line);
+      }
+    }
+
+    // Agregar el último bloque si tiene contenido
+    if (currentBlock.text.length || currentBlock.urls.length) {
+      eventBlocks.push(currentBlock);
+    }
+
     const allShortLinks = [];
 
     if (urls.length) {
@@ -315,20 +343,22 @@ bot.on('message', async (msg) => {
     // Mapear URLs a sus shortLinks
     const urlToShortLink = new Map(allShortLinks.map(link => [link.url, link]));
 
-    // Procesar cada bloque de evento por separado
+    // Procesar cada bloque de evento
     const messagesToSend = eventBlocks.map(block => {
-      const blockLines = block.split('\n').filter(line => line.trim());
-      const blockUrls = blockLines.map(line => urls.find(url => line.includes(url))).filter(url => url);
+      // Formatear el texto del bloque, reemplazando URLs por frases personalizadas
+      let formattedText = block.text.join('\n');
+      const blockUrls = block.urls.filter(url => urlToShortLink.has(url));
       const blockShortLinks = blockUrls.map(url => urlToShortLink.get(url)).filter(link => link);
-      const formattedBlock = blockLines.map(line => {
-        urls.forEach(url => {
-          if (line.includes(url)) {
-            const link = urlToShortLink.get(url);
-            if (link) line = line.replace(url, link.replacementPhrase);
-          }
-        });
-        return line;
-      }).join('\n') + `${SIGNATURE}${WARNING_MESSAGE}`;
+
+      blockUrls.forEach(url => {
+        const link = urlToShortLink.get(url);
+        if (link) {
+          formattedText = formattedText.split(url).join(link.replacementPhrase);
+        }
+      });
+
+      // Agregar la firma y la advertencia al final del bloque
+      formattedText += `${SIGNATURE}${WARNING_MESSAGE}`;
 
       // Agrupar todos los enlaces del bloque en un solo teclado inline
       const inlineKeyboard = blockShortLinks.length ? [blockShortLinks.map(link => ({
@@ -337,7 +367,7 @@ bot.on('message', async (msg) => {
       }))] : [];
 
       return {
-        text: formattedBlock,
+        text: formattedText,
         inlineKeyboard
       };
     });
