@@ -703,10 +703,11 @@ bot.onText(/\/clean/, async (msg) => {
   }
 
   try {
+    // Seleccionar todos los enlaces que NO pertenezcan al canal específico
     const { data: linksToDelete, error: selectError } = await supabaseService
       .from('short_links')
       .select('id')
-      .neq('chat_id', chatId);
+      .neq('chat_id', '-1002348662107'); // Especificamos explícitamente el chat_id del canal
 
     if (selectError) {
       console.error(`❌ Error al consultar enlaces para eliminar: ${selectError.message}`);
@@ -722,6 +723,8 @@ bot.onText(/\/clean/, async (msg) => {
 
     const idsToDelete = linksToDelete.map(link => link.id);
     console.log(`🧹 Enlaces a eliminar encontrados fuera del canal: ${idsToDelete.length}`);
+
+    // Eliminar los enlaces que no pertenecen al canal
     const { error: deleteError } = await supabaseService
       .from('short_links')
       .delete()
@@ -734,7 +737,7 @@ bot.onText(/\/clean/, async (msg) => {
     }
 
     console.log(`✅ ${idsToDelete.length} enlaces eliminados de la base de datos`);
-    await bot.sendMessage(channel.chat_id, `🧹 Se han eliminado ${idsToDelete.length} enlaces que no pertencen al canal de la base de datos.${SIGNATURE}`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
+    await bot.sendMessage(channel.chat_id, `🧹 Se han eliminado ${idsToDelete.length} enlaces que no pertenecen al canal de la base de datos.${SIGNATURE}`, { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
   } catch (error) {
     console.error(`❌ Error inesperado en /clean: ${error.message}`);
     await bot.sendMessage(channel.chat_id, '⚠️ Ocurrió un error inesperado al limpiar los enlaces.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
