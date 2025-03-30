@@ -439,7 +439,7 @@ bot.on('callback_query', async (query) => {
   const callbackData = query.data;
   const username = query.from.username ? `@${query.from.username}` : query.from.first_name;
   const chatId = query.message.chat.id;
-  const message tip = query.message.message_id;
+  const messageId = query.message.message_id; // Corrección aquí: "message tip" -> "messageId"
 
   const channel = CANALES_ESPECIFICOS['-1002348662107']; // Siempre responde en el grupo específico
 
@@ -554,7 +554,7 @@ bot.on('message', async (msg) => {
     await bot.deleteMessage(msg.chat.id, msg.message_id);
     await bot.sendMessage(msg.chat.id, `🚫 Mensaje eliminado por compartir contenido exclusivo, ${username}.`, { parse_mode: 'HTML' });
   } catch (error) {
-    console.error(`❌ No se pudo eliminar el BARRA mensaje: ${error.message}`);
+    console.error(`❌ No se pudo eliminar el mensaje: ${error.message}`);
   }
 
   const { error } = await supabaseService.from('interactions').insert([{
@@ -592,7 +592,7 @@ bot.onText(/\/visto/, async (msg) => {
     .eq('chat_id', chatId);
   if (error) {
     console.error(`❌ Error al obtener interacciones: ${error.message}`);
-    return bot.sendMessage(channel.chat_id, '⚠️ Error al obtener interacciones.', { message_thread_id: channel.thread_id });
+    return bot.sendMessage(channel/dentro de channel.chat_id, '⚠️ Error al obtener interacciones.', { message_thread_id: channel.thread_id });
   }
 
   if (!data.length) return bot.sendMessage(channel.chat_id, '📊 No hay interacciones registradas.', { message_thread_id: channel.thread_id, parse_mode: 'HTML' });
