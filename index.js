@@ -1,8 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
-const { nanoid } = require('nanoid');
-const punycode = require('punycode/'); // Reemplazo de punycode nativo
+const { customAlphabet } = require('nanoid'); // Usaremos customAlphabet para un shortId más opaco
 
 // Configuración de logging
 console.log('🚀 Iniciando el bot EntresHijos...');
@@ -13,8 +12,8 @@ const TOKEN = '7624808452:AAHffFqqhaXtun4XthusBfeeeVDcp6Qsrs4';
 // Firma con emojis (permanente en todos los mensajes)
 const SIGNATURE = '\n\n✨ EntresHijos ✨';
 
-// Advertencia para no compartir
-const WARNING_MESSAGE = '\n⚠️ Este mensaje es exclusivo para este grupo. No lo compartas para proteger el contenido.';
+// Advertencia para no compartir ni hacer capturas
+const WARNING_MESSAGE = '\n⚠️ Este mensaje es exclusivo para este grupo. No lo copies, reenvíes ni hagas capturas de pantalla para proteger el contenido.';
 
 // Intervalo para limpieza automática (en milisegundos, ej. cada 6 horas)
 const AUTO_CLEAN_INTERVAL = 6 * 60 * 60 * 1000; // 6 horas
@@ -22,36 +21,16 @@ const AUTO_CLEAN_INTERVAL = 6 * 60 * 60 * 1000; // 6 horas
 // Configuración del servidor webhook
 const PORT = process.env.PORT || 8443;
 const WEBHOOK_URL = 'https://entreboton.onrender.com/webhook';
-const REDIRECT_BASE_URL = 'https://entreboton.onrender.com/redirect/';
+const REDIRECT_BASE_URL = 'https://ehjs.link/redirect/'; // Dominio ficticio para los enlaces disfrazados
 
-// Configuración de Supabase (usando variables de entorno)
+// Configuración de Supabase
 const SUPABASE_URL = 'https://ycvkdxzxrzuwnkybmjwf.supabase.co';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4crp1d25reWJtandmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDI4Mjg4NzYsImV4cCI6MjA1ODQwNDg3Nn0.1ts8XIpysbMe5heIg3oWLfqKxReusZxemw4lk2WZ4GI';
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4crp1d25reWJtandmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjgyODg3NiwiZXhwIjoyMDU4NDA0ODc2fQ.q1234567890abcdefghij';
 
-// Cliente de Supabase con permisos anónimos (para operaciones de lectura)
+// Cliente de Supabase
 const supabaseAnon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-// Cliente de Supabase con permisos de service_role (para operaciones de escritura)
 const supabaseService = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-
-// Verificación inicial de los clientes de Supabase
-(async () => {
-  try {
-    const { data, error } = await supabaseAnon.from('short_links').select('id').limit(1);
-    if (error) throw error;
-    console.log('✅ Conexión con Supabase (anon) establecida correctamente.');
-  } catch (error) {
-    console.error('❌ Error al conectar con Supabase (anon):', error.message);
-  }
-
-  try {
-    const { data, error } = await supabaseService.from('short_links').select('id').limit(1);
-    if (error) throw error;
-    console.log('✅ Conexión con Supabase (service) establecida correctamente.');
-  } catch (error) {
-    console.error('❌ Error al conectar con Supabase (service):', error.message);
-  }
-})();
 
 // Configuración de grupos y canales específicos
 const GRUPOS_PREDEFINIDOS = { 
@@ -73,6 +52,58 @@ const bot = new TelegramBot(TOKEN, { polling: false });
 const app = express();
 app.use(express.json());
 
+// Generador de shortId con alfabeto personalizado (más opaco)
+const generateShortId = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789', 10);
+
+// **Migración de la base de datos**
+async function migrateDatabase() {
+  try {
+    console.log('📦 Iniciando migración de la base de datos...');
+
+    // Crear tabla short_links
+    await supabaseService.rpc('execute_sql', {
+      query: `
+        CREATE TABLE IF NOT EXISTS short_links (
+          id TEXT PRIMARY KEY,
+          original_url TEXT NOT NULL,
+          message_id BIGINT NOT NULL,
+          chat_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          username TEXT,
+          expires_at TIMESTAMPTZ NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_short_links_chat_id ON short_links (chat_id);
+        CREATE INDEX IF NOT EXISTS idx_short_links_expires_at ON short_links (expires_at);
+      `
+    });
+
+    // Crear tabla clicks
+    await supabaseService.rpc('execute_sql', {
+      query: `
+        CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+        CREATE TABLE IF NOT EXISTS clicks (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          short_id TEXT NOT NULL,
+          username TEXT NOT NULL,
+          original_url TEXT NOT NULL,
+          click_count BIGINT NOT NULL DEFAULT 1,
+          last_clicked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          CONSTRAINT unique_short_id_username UNIQUE (short_id, username)
+        );
+        CREATE INDEX IF NOT EXISTS idx_clicks_short_id_username ON clicks (short_id, username);
+        CREATE INDEX IF NOT EXISTS idx_clicks_last_clicked_at ON clicks (last_clicked_at);
+      `
+    });
+
+    console.log('✅ Migración de la base de datos completada.');
+  } catch (error) {
+    console.error('❌ Error durante la migración de la base de datos:', error.message);
+    process.exit(1);
+  }
+}
+
 // **Sanitizar texto**
 function sanitizeText(text) {
   if (!text) return '';
@@ -80,211 +111,104 @@ function sanitizeText(text) {
 }
 
 // **Extraer URLs únicas (evitar duplicados)**
-function extractUrls(msg) {
-  const text = msg.text || msg.caption || '';
+function extractUrls(text) {
   const urlRegex = /(https?:\/\/[^\s]+)/g;
-  const urls = new Set(); // Usamos Set para evitar duplicados
+  const urls = new Set();
   let match;
   while ((match = urlRegex.exec(text)) !== null) {
     urls.add(match[0]);
   }
-  const entities = msg.entities || msg.caption_entities || [];
-  entities.filter(e => e.type === 'url').forEach(e => urls.add(text.substr(e.offset, e.length)));
-  return Array.from(urls); // Convertimos el Set a Array
-}
-
-// **Generar token para autenticación (truncado a 32 caracteres)**
-function generateToken(userId, shortId, ipAddress) {
-  const secret = process.env.TOKEN_SECRET || 'tu-clave-secreta-aqui-32-caracteres';
-  const fullToken = require('crypto').createHmac('sha256', secret).update(`${userId}-${shortId}-${ipAddress}`).digest('hex');
-  return fullToken.substring(0, 32);
+  return Array.from(urls);
 }
 
 // **Acortar URL y almacenar en Supabase**
 async function shortenUrl(originalUrl, messageId, chatId, userId, username, expiryHours = 24) {
-  const shortId = nanoid();
-  const token = generateToken(userId, shortId, 'initial');
+  const shortId = generateShortId(); // Usamos el generador personalizado
   const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString();
 
-  const dataToInsert = {
+  const { error } = await supabaseService.from('short_links').insert({
     id: shortId,
     original_url: originalUrl,
     message_id: messageId,
     chat_id: chatId,
     user_id: userId,
-    token,
-    expires_at: expiresAt,
-    ip_address: null
-  };
+    username: username,
+    expires_at: expiresAt
+  });
 
-  if (username) {
-    dataToInsert.username = username;
-  }
-
-  const { error } = await supabaseService.from('short_links').insert([dataToInsert]);
   if (error) {
     console.error(`❌ Error al guardar enlace acortado: ${error.message}`);
     return null;
   }
-  console.log(`✅ Enlace acortado guardado en Supabase: ${shortId}`);
-  return { shortId, token };
+  console.log(`✅ Enlace acortado guardado: ${shortId}`);
+  return shortId;
 }
 
-// **Dividir mensaje en partes si excede el límite de Telegram (4096 caracteres)**
-function splitMessage(text, maxLength = 4096) {
-  const parts = [];
-  let currentPart = '';
+// **Reemplazar URLs en el texto por enlaces disfrazados**
+async function disguiseUrls(text, messageId, chatId, userId, username) {
+  const urls = extractUrls(text);
+  if (!urls.length) return { modifiedText: text, shortLinks: [] };
 
-  const lines = text.split('\n');
-  for (const line of lines) {
-    if (currentPart.length + line.length + 1 > maxLength) {
-      parts.push(currentPart.trim());
-      currentPart = '';
-    }
-    currentPart += line + '\n';
-  }
-
-  if (currentPart.trim()) {
-    parts.push(currentPart.trim());
-  }
-
-  return parts;
-}
-
-// **Detectar título con hora y/o fecha**
-function detectEventTitle(line) {
-  const timeRegex = /^\d{1,2}:\d{2}/; // Ej. "15:00"
-  const dateTimeRegex = /^\d{1,2}\/\d{1,2}(\/\d{2,4})?\s+\d{1,2}:\d{2}/; // Ej. "30/03 15:00" o "30/03/2025 15:00"
-  const dateRegex = /^\d{1,2}\/\d{1,2}(\/\d{2,4})?/; // Ej. "30/03" o "30/03/2025"
-
-  if (dateTimeRegex.test(line)) {
-    return line; // Fecha y hora completa
-  } else if (timeRegex.test(line)) {
-    return line; // Solo hora
-  } else if (dateRegex.test(line)) {
-    return line; // Solo fecha
-  } else {
-    return line; // Cualquier texto como título si no hay formato de fecha/hora
-  }
-}
-
-// **Estructurar mensaje con enlaces acortados (título y botones)**
-async function structureMessage(text, urls, messageId, chatId, userId, username) {
-  if (!text && !urls.length) return { formattedText: '', shortLinks: [] };
-
-  let formattedText = text || '📅 Evento';
   const shortLinks = [];
+  let modifiedText = text;
 
-  console.log(`📝 URLs detectadas (únicas): ${urls}`);
-  console.log(`📝 Texto original: ${text}`);
-
-  // Eliminar las URLs del texto para dejar solo el título
-  const urlRegex = /(https?:\/\/[^\s]+)/g;
-  formattedText = formattedText.replace(urlRegex, '').trim() || '📅 Evento';
-
-  const shortLinksPromises = urls.map(async (url, index) => {
-    const shortLink = await shortenUrl(url, messageId, chatId, userId, username);
-    if (shortLink) {
-      const { shortId, token } = shortLink;
-      const callbackData = `click:${shortId}:${token}`;
-      return { url, shortId, token, callbackData };
+  for (const url of urls) {
+    const shortId = await shortenUrl(url, messageId, chatId, userId, username);
+    if (shortId) {
+      const redirectUrl = `${REDIRECT_BASE_URL}${shortId}`;
+      modifiedText = modifiedText.replace(url, redirectUrl);
+      shortLinks.push({ shortId, originalUrl: url });
     }
-    console.warn(`⚠️ No se pudo acortar el enlace: ${url}`);
-    return null;
-  });
-
-  const results = (await Promise.all(shortLinksPromises)).filter(link => link !== null);
-  shortLinks.push(...results);
-
-  console.log(`✅ ${results.length} enlaces acortados únicos.`);
-  console.log(`📝 Texto formateado: ${formattedText}`);
-  return { formattedText, shortLinks };
-}
-
-// **Verificar si el usuario es administrador**
-async function isAdmin(chatId, userId) {
-  try {
-    console.log(`🔍 Verificando si ${userId} es administrador en ${chatId}`);
-    const admins = await bot.getChatAdministrators(chatId);
-    if (!admins || !Array.isArray(admins)) {
-      console.error('❌ Respuesta inválida de getChatAdministrators:', admins);
-      return false;
-    }
-    const isAdminUser = admins.some(member => member.user.id === userId);
-    console.log(`✅ Resultado de verificación: ${isAdminUser}`);
-    return isAdminUser;
-  } catch (error) {
-    console.error(`❌ Error al verificar administrador: ${error.message}`);
-    return false;
   }
+
+  return { modifiedText, shortLinks };
 }
 
-// **Unificar clics en la tabla clicks**
-async function unifyClicks(chatId = null) {
+// **Registrar un clic en la tabla clicks**
+async function registerClick(shortId, username, originalUrl) {
   try {
-    // Obtener todos los clics existentes
-    const { data: clicks, error: selectError } = await supabaseService
+    // Buscar si ya existe un registro para este usuario y enlace
+    const { data: existingClick, error: selectError } = await supabaseService
       .from('clicks')
-      .select('username, short_code');
+      .select('id, click_count')
+      .eq('short_id', shortId)
+      .eq('username', username)
+      .single();
 
-    if (selectError) throw new Error(`Error al obtener clics: ${selectError.message}`);
-
-    // Eliminar todos los registros existentes para reiniciar
-    const { error: deleteError } = await supabaseService
-      .from('clicks')
-      .delete()
-      .neq('username', ''); // Filtro para evitar errores si la tabla está vacía
-
-    if (deleteError) throw new Error(`Error al eliminar clics: ${deleteError.message}`);
-
-    if (!clicks || clicks.length === 0) {
-      console.log('✅ No hay clics para unificar. Tabla reiniciada a 0.');
-      if (chatId) {
-        const channel = CANALES_ESPECIFICOS[chatId];
-        await bot.sendMessage(channel.chat_id, '✅ No hay clics para unificar. Los conteos han sido reiniciados a 0.', { 
-          message_thread_id: channel.thread_id || undefined, 
-          parse_mode: 'HTML' 
-        });
-      }
-      return;
+    if (selectError && selectError.code !== 'PGRST116') {
+      throw new Error(`Error al buscar clic existente: ${selectError.message}`);
     }
 
-    // Agrupar por usuario y contar clics
-    const clickCountByUser = clicks.reduce((acc, click) => {
-      acc[click.username] = (acc[click.username] || 0) + 1;
-      return acc;
-    }, {});
+    if (existingClick) {
+      // Actualizar el contador y la fecha
+      const { error: updateError } = await supabaseService
+        .from('clicks')
+        .update({
+          click_count: existingClick.click_count + 1,
+          last_clicked_at: new Date().toISOString()
+        })
+        .eq('id', existingClick.id);
 
-    // Insertar registros unificados
-    const unifiedClicks = Object.entries(clickCountByUser).map(([username, total_clicks]) => ({
-      username,
-      total_clicks,
-      last_updated: new Date().toISOString()
-    }));
+      if (updateError) throw new Error(`Error al actualizar clic: ${updateError.message}`);
+      console.log(`✅ Clic actualizado para ${username} en ${shortId}: ${existingClick.click_count + 1} clics`);
+    } else {
+      // Insertar un nuevo registro
+      const { error: insertError } = await supabaseService
+        .from('clicks')
+        .insert({
+          short_id: shortId,
+          username: username,
+          original_url: originalUrl,
+          click_count: 1,
+          last_clicked_at: new Date().toISOString(),
+          created_at: new Date().toISOString()
+        });
 
-    const { error: insertError } = await supabaseService
-      .from('clicks')
-      .insert(unifiedClicks);
-
-    if (insertError) throw new Error(`Error al insertar clics unificados: ${insertError.message}`);
-
-    console.log(`✅ Clics unificados: ${unifiedClicks.length} usuarios procesados. Total de clics reiniciados.`);
-    if (chatId) {
-      const channel = CANALES_ESPECIFICOS[chatId];
-      await bot.sendMessage(channel.chat_id, `🧹 Se han unificado ${unifiedClicks.length} usuarios con sus clics totales. Conteos reiniciados.${SIGNATURE}`, { 
-        message_thread_id: channel.thread_id || undefined, 
-        parse_mode: 'HTML' 
-      });
+      if (insertError) throw new Error(`Error al registrar clic: ${insertError.message}`);
+      console.log(`✅ Clic registrado para ${username} en ${shortId}`);
     }
   } catch (error) {
-    console.error(`❌ Error al unificar clics: ${error.message}`);
-    if (chatId) {
-      const channel = CANALES_ESPECIFICOS[chatId];
-      await bot.sendMessage(channel.chat_id, '⚠️ Error al unificar clics.', { 
-        message_thread_id: channel.thread_id || undefined, 
-        parse_mode: 'HTML' 
-      });
-    }
+    console.error(`❌ Error al registrar clic: ${error.message}`);
   }
 }
 
@@ -293,10 +217,9 @@ async function autoCleanExpiredLinks() {
   try {
     const now = new Date().toISOString();
 
-    // Obtener enlaces expirados
     const { data: expiredLinks, error: selectError } = await supabaseService
       .from('short_links')
-      .select('id, chat_id, message_id, expires_at')
+      .select('id, chat_id, message_id')
       .lt('expires_at', now);
 
     if (selectError) throw new Error(`Error al obtener enlaces expirados: ${selectError.message}`);
@@ -311,7 +234,7 @@ async function autoCleanExpiredLinks() {
       if (channel) {
         try {
           await bot.deleteMessage(link.chat_id, link.message_id);
-          console.log(`✅ Mensaje eliminado del grupo: ${link.message_id} en ${link.chat_id}`);
+          console.log(`✅ Mensaje eliminado: ${link.message_id} en ${link.chat_id}`);
         } catch (error) {
           console.warn(`⚠️ No se pudo eliminar mensaje ${link.message_id}: ${error.message}`);
         }
@@ -327,66 +250,11 @@ async function autoCleanExpiredLinks() {
 
     if (deleteError) throw new Error(`Error al eliminar enlaces expirados: ${deleteError.message}`);
 
-    console.log(`✅ ${idsToDelete.length} enlaces expirados eliminados de Supabase y grupos.`);
+    console.log(`✅ ${idsToDelete.length} enlaces expirados eliminados.`);
   } catch (error) {
     console.error(`❌ Error al autoeliminar enlaces expirados: ${error.message}`);
   }
 }
-
-// **Comando /start**
-bot.onText(/\/start/, async (msg) => {
-  const chatId = msg.chat.id.toString();
-  const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
-
-  if (!GRUPOS_PREDEFINIDOS[chatId]) return;
-  if (threadId && threadId !== CANALES_ESPECIFICOS[chatId]?.thread_id) return;
-
-  const channel = CANALES_ESPECIFICOS[chatId];
-  const welcomeMessage = `
-<b>¡Bienvenido a EntresHijos! ✨</b>
-
-Soy un bot diseñado para proteger el contenido exclusivo de este grupo. Aquí tienes algunas cosas que puedo hacer:
-
-📌 <b>Proteger enlaces:</b> Convierto los enlaces en botones protegidos que expiran en 24 horas.
-📸 <b>Proteger multimedia:</b> Evito que fotos, videos y GIFs sean reenviados.
-🚨 <b>Detectar reenvíos:</b> Si alguien reenvía contenido exclusivo, lo detecto y notifico.
-
-¡Envía un enlace, foto, video o GIF para empezar! 🚀
-  `;
-  await bot.sendMessage(channel.chat_id, welcomeMessage, { 
-    message_thread_id: channel.thread_id || undefined, 
-    parse_mode: 'HTML' 
-  });
-});
-
-// **Comando /menu**
-bot.onText(/\/menu/, async (msg) => {
-  const chatId = msg.chat.id.toString();
-  const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
-
-  if (!GRUPOS_PREDEFINIDOS[chatId]) return;
-  if (threadId && threadId !== CANALES_ESPECIFICOS[chatId]?.thread_id) return;
-
-  const channel = CANALES_ESPECIFICOS[chatId];
-  const menuMessage = `
-<b>📋 Menú de Comandos - EntresHijos ✨</b>
-
-Aquí tienes la lista de comandos disponibles:
-
-📌 <b>/start</b> - Inicia el bot y muestra un mensaje de bienvenida.
-🧹 <b>/clean</b> - (Solo admins) Elimina enlaces fuera de los grupos o expirados de la base de datos.
-📊 <b>/union</b> - (Solo admins) Unifica los clics por usuario en la base de datos, reiniciando los conteos.
-📋 <b>/menu</b> - Muestra este menú con todos los comandos disponibles.
-
-¡Usa estos comandos para gestionar el contenido del grupo! 🚀
-${SIGNATURE}
-  `;
-
-  await bot.sendMessage(channel.chat_id, menuMessage, { 
-    message_thread_id: channel.thread_id || undefined, 
-    parse_mode: 'HTML' 
-  });
-});
 
 // **Procesar mensajes**
 bot.on('message', async (msg) => {
@@ -399,226 +267,79 @@ bot.on('message', async (msg) => {
   const userId = msg.from.id.toString();
   const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
   const originalMessageId = msg.message_id;
-
   const channel = CANALES_ESPECIFICOS[chatId];
 
   const text = sanitizeText(msg.text || msg.caption);
-  const urls = extractUrls(msg);
   const photo = msg.photo ? msg.photo[msg.photo.length - 1].file_id : null;
   const video = msg.video ? msg.video.file_id : null;
   const animation = msg.animation ? msg.animation.file_id : null;
 
   if (msg.text && msg.text.startsWith('/')) return;
-  if (!urls.length && !photo && !video && !animation) return;
+  if (!text && !photo && !video && !animation) return;
 
   const loadingMsg = await bot.sendMessage(channel.chat_id, '⏳ Generando publicación...', { 
-    message_thread_id: channel.thread_id || undefined 
+    message_thread_id: channel.thread_id || undefined,
+    protect_content: true
   });
 
   try {
-    // Dividir el texto en bloques de eventos basados en hora y/o fecha
-    const lines = text.split('\n').filter(line => line.trim());
-    const eventBlocks = [];
-    let currentBlock = { title: '', urls: [] };
+    let finalText = text || '';
+    let shortLinks = [];
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      const isTitle = /^\d{1,2}:\d{2}/.test(line) || // Hora: "15:00"
-                      /^\d{1,2}\/\d{1,2}(\/\d{2,4})?\s+\d{1,2}:\d{2}/.test(line) || // Fecha y hora: "30/03 15:00"
-                      /^\d{1,2}\/\d{1,2}(\/\d{2,4})?/.test(line) || // Fecha: "30/03"
-                      !line.match(/^https?:\/\//); // Cualquier texto sin URL
-
-      if (isTitle && (currentBlock.title || currentBlock.urls.length)) {
-        eventBlocks.push(currentBlock);
-        currentBlock = { title: detectEventTitle(line), urls: [] };
-      } else if (isTitle) {
-        currentBlock.title = detectEventTitle(line);
-      } else if (line.match(/^https?:\/\//)) {
-        currentBlock.urls.push(line);
-      }
+    if (text) {
+      const { modifiedText, shortLinks: generatedLinks } = await disguiseUrls(text, loadingMsg.message_id, chatId, userId, username);
+      finalText = modifiedText;
+      shortLinks = generatedLinks;
     }
 
-    if (currentBlock.title || currentBlock.urls.length) {
-      eventBlocks.push(currentBlock);
-    }
-
-    // Si no hay bloques válidos, usar un título por defecto
-    if (!eventBlocks.length) {
-      eventBlocks.push({ title: '📅 Evento', urls });
-    }
-
-    const allUrls = urls;
-    const { formattedText: fullText, shortLinks } = await structureMessage(text, allUrls, loadingMsg.message_id, chatId, userId, username);
-    const urlToShortLink = new Map(shortLinks.map(link => [link.url, link]));
-
-    const messagesToSend = eventBlocks.map(block => {
-      let formattedText = block.title.trim() || '📅 Evento';
-      const blockUrls = block.urls.filter(url => urlToShortLink.has(url));
-      const blockShortLinks = blockUrls.map(url => urlToShortLink.get(url)).filter(link => link);
-
-      formattedText = `<b>${formattedText}</b>${SIGNATURE}${WARNING_MESSAGE}`;
-
-      const inlineKeyboard = blockShortLinks.length ? [
-        blockShortLinks.map((link, index) => ({
-          text: `🔗 Enlace ${index + 1}`,
-          callback_data: link.callbackData
-        }))
-      ] : [];
-
-      return {
-        text: formattedText,
-        inlineKeyboard
-      };
-    });
+    finalText = finalText ? `${finalText}${SIGNATURE}${WARNING_MESSAGE}` : `📅 Evento${SIGNATURE}${WARNING_MESSAGE}`;
 
     await bot.deleteMessage(channel.chat_id, loadingMsg.message_id);
 
-    // Enviar cada bloque de evento como un mensaje separado
-    for (let i = 0; i < messagesToSend.length; i++) {
-      const message = messagesToSend[i];
-      const messageParts = splitMessage(message.text);
-      let sentMessage;
-
-      if (i === 0 && (photo || video || animation)) {
-        if (photo) {
-          sentMessage = await bot.sendPhoto(channel.chat_id, photo, {
-            caption: messageParts[0],
-            message_thread_id: channel.thread_id || undefined,
-            parse_mode: 'HTML',
-            protect_content: true,
-            reply_markup: message.inlineKeyboard.length ? { inline_keyboard: message.inlineKeyboard } : undefined
-          });
-        } else if (video) {
-          sentMessage = await bot.sendVideo(channel.chat_id, video, {
-            caption: messageParts[0],
-            message_thread_id: channel.thread_id || undefined,
-            parse_mode: 'HTML',
-            protect_content: true,
-            reply_markup: message.inlineKeyboard.length ? { inline_keyboard: message.inlineKeyboard } : undefined
-          });
-        } else if (animation) {
-          sentMessage = await bot.sendAnimation(channel.chat_id, animation, {
-            caption: messageParts[0],
-            message_thread_id: channel.thread_id || undefined,
-            parse_mode: 'HTML',
-            protect_content: true,
-            reply_markup: message.inlineKeyboard.length ? { inline_keyboard: message.inlineKeyboard } : undefined
-          });
-        }
-
-        for (let j = 1; j < messageParts.length; j++) {
-          await bot.sendMessage(channel.chat_id, messageParts[j], {
-            message_thread_id: channel.thread_id || undefined,
-            parse_mode: 'HTML',
-            protect_content: true
-          });
-        }
-      } else {
-        sentMessage = await bot.sendMessage(channel.chat_id, messageParts[0], {
-          message_thread_id: channel.thread_id || undefined,
-          parse_mode: 'HTML',
-          disable_web_page_preview: true,
-          protect_content: true,
-          reply_markup: message.inlineKeyboard.length ? { inline_keyboard: message.inlineKeyboard } : undefined
-        });
-
-        for (let j = 1; j < messageParts.length; j++) {
-          await bot.sendMessage(channel.chat_id, messageParts[j], {
-            message_thread_id: channel.thread_id || undefined,
-            parse_mode: 'HTML',
-            disable_web_page_preview: true,
-            protect_content: true
-          });
-        }
-      }
-
-      messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: message.text });
+    let sentMessage;
+    if (photo) {
+      sentMessage = await bot.sendPhoto(channel.chat_id, photo, {
+        caption: finalText,
+        message_thread_id: channel.thread_id || undefined,
+        parse_mode: 'HTML',
+        protect_content: true
+      });
+    } else if (video) {
+      sentMessage = await bot.sendVideo(channel.chat_id, video, {
+        caption: finalText,
+        message_thread_id: channel.thread_id || undefined,
+        parse_mode: 'HTML',
+        protect_content: true
+      });
+    } else if (animation) {
+      sentMessage = await bot.sendAnimation(channel.chat_id, animation, {
+        caption: finalText,
+        message_thread_id: channel.thread_id || undefined,
+        parse_mode: 'HTML',
+        protect_content: true
+      });
+    } else {
+      sentMessage = await bot.sendMessage(channel.chat_id, finalText, {
+        message_thread_id: channel.thread_id || undefined,
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+        protect_content: true
+      });
     }
 
-    // Eliminar el mensaje original después de procesarlo
+    messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: finalText });
+
+    // Eliminar el mensaje original
     await bot.deleteMessage(chatId, originalMessageId);
-    console.log(`✅ Mensaje original (ID: ${originalMessageId}) eliminado después de procesar`);
+    console.log(`✅ Mensaje original (ID: ${originalMessageId}) eliminado.`);
   } catch (error) {
     console.error(`❌ Error al procesar mensaje: ${error.message}`);
     await bot.deleteMessage(channel.chat_id, loadingMsg.message_id);
     await bot.sendMessage(channel.chat_id, '⚠️ Error al generar publicación.', { 
       message_thread_id: channel.thread_id || undefined, 
-      parse_mode: 'HTML' 
+      parse_mode: 'HTML',
+      protect_content: true
     });
-  }
-});
-
-// **Manejar clics en botones inline**
-bot.on('callback_query', async (query) => {
-  const callbackQueryId = query.id;
-  const callbackData = query.data;
-  const username = query.from.username ? `@${query.from.username}` : query.from.first_name;
-  const chatId = query.message.chat.id.toString();
-  const messageId = query.message.message_id;
-
-  try {
-    const dataParts = callbackData.split(':');
-    if (dataParts.length !== 3 || dataParts[0] !== 'click') {
-      console.error(`❌ Formato de callbackData inválido: ${callbackData}`);
-      return bot.answerCallbackQuery(callbackQueryId, { text: '⚠️ Error: Formato de enlace inválido.', show_alert: true });
-    }
-
-    const shortId = dataParts[1];
-    const token = dataParts[2];
-
-    const { data: linkData, error } = await supabaseAnon
-      .from('short_links')
-      .select('original_url, expires_at')
-      .eq('id', shortId)
-      .single();
-
-    if (error || !linkData) {
-      console.error('Error al obtener el enlace desde Supabase:', error);
-      return bot.answerCallbackQuery(callbackQueryId, { text: '⚠️ Error: Enlace no encontrado o expirado.', show_alert: true });
-    }
-
-    const expiresAt = new Date(linkData.expires_at);
-    const now = new Date();
-    if (now > expiresAt) {
-      console.warn(`⚠️ Enlace expirado: ${shortId}`);
-      return bot.answerCallbackQuery(callbackQueryId, { text: '⏰ Este enlace ha expirado.', show_alert: true });
-    }
-
-    const originalUrl = linkData.original_url;
-
-    const { error: clickError } = await supabaseService.from('clicks').insert({
-      short_code: shortId,
-      username: username,
-      clicked_at: new Date().toISOString(),
-    });
-
-    if (clickError) {
-      console.error('Error al registrar el clic en Supabase:', clickError);
-    } else {
-      console.log(`✅ Clic registrado correctamente en Supabase por ${username}`);
-    }
-
-    const redirectToken = require('crypto').randomBytes(16).toString('hex');
-    const redirectUrl = `${REDIRECT_BASE_URL}${shortId}?token=${redirectToken}`;
-
-    // Enviar mensaje con la URL en lugar de usar answerCallbackQuery con url
-    await bot.sendMessage(chatId, `✅ Enlace listo: ${redirectUrl}`, {
-      reply_to_message_id: messageId,
-      parse_mode: 'HTML'
-    });
-
-    await bot.answerCallbackQuery(callbackQueryId, {
-      text: '✅ Clic registrado. Revisa el enlace enviado.',
-      show_alert: false
-    });
-
-  } catch (error) {
-    console.error('Error al procesar el callback:', error);
-    if (error.code === 'ETELEGRAM' && error.response?.body?.description?.includes('query is too old')) {
-      await bot.answerCallbackQuery(callbackQueryId, { text: '⏰ Lo siento, el enlace ha expirado.', show_alert: true });
-    } else {
-      await bot.answerCallbackQuery(callbackQueryId, { text: '⚠️ Error al procesar el enlace. Intenta de nuevo.', show_alert: true });
-    }
   }
 });
 
@@ -644,12 +365,16 @@ bot.on('message', async (msg) => {
 
   await bot.sendMessage(channel.chat_id, `🚨 ${username} reenvió un mensaje exclusivo a ${msg.chat.title || msg.chat.id}!`, { 
     message_thread_id: channel.thread_id || undefined, 
-    parse_mode: 'HTML' 
+    parse_mode: 'HTML',
+    protect_content: true
   });
 
   try {
     await bot.deleteMessage(msg.chat.id, msg.message_id);
-    await bot.sendMessage(msg.chat.id, `🚫 Mensaje eliminado por compartir contenido exclusivo, ${username}.`, { parse_mode: 'HTML' });
+    await bot.sendMessage(msg.chat.id, `🚫 Mensaje eliminado por compartir contenido exclusivo, ${username}.`, { 
+      parse_mode: 'HTML',
+      protect_content: true
+    });
   } catch (error) {
     console.error(`❌ No se pudo eliminar el mensaje: ${error.message}`);
   }
@@ -666,141 +391,14 @@ bot.on('message', async (msg) => {
   if (error) {
     console.error(`❌ Error al registrar reenvío: ${error.message}`);
   } else {
-    console.log(`✅ Reenvío registrado en Supabase: ${username} reenvió mensaje ${forwardedMessageId}`);
+    console.log(`✅ Reenvío registrado: ${username} reenvió mensaje ${forwardedMessageId}`);
   }
-});
-
-// **Comando /clean (solo para administradores)**
-bot.onText(/\/clean/, async (msg) => {
-  const chatId = msg.chat.id.toString();
-  const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
-
-  console.log(`📝 Procesando /clean - Chat ID: ${chatId}, Thread ID: ${threadId}`);
-
-  if (!GRUPOS_PREDEFINIDOS[chatId]) {
-    console.log(`⚠️ Chat ${chatId} no está en GRUPOS_PREDEFINIDOS`);
-    return;
-  }
-  if (threadId && threadId !== CANALES_ESPECIFICOS[chatId]?.thread_id) {
-    console.log(`⚠️ Thread ${threadId} no coincide con ${CANALES_ESPECIFICOS[chatId]?.thread_id}`);
-    return;
-  }
-
-  const userId = msg.from.id;
-  const channel = CANALES_ESPECIFICOS[chatId];
-
-  const isUserAdmin = await isAdmin(chatId, userId);
-  if (!isUserAdmin) {
-    console.log(`🚫 ${userId} no es administrador en ${chatId}`);
-    await bot.sendMessage(channel.chat_id, '🚫 Solo los administradores pueden usar este comando.', { 
-      message_thread_id: channel.thread_id || undefined, 
-      parse_mode: 'HTML' 
-    });
-    return;
-  }
-
-  try {
-    const now = new Date().toISOString();
-
-    const { data: linksToDelete, error: selectError } = await supabaseService
-      .from('short_links')
-      .select('id, chat_id, expires_at')
-      .or(`chat_id.not.in.(-1002348662107,-1002616995435),expires_at.lt.${now}`);
-
-    if (selectError) {
-      console.error(`❌ Error al consultar enlaces para eliminar: ${selectError.message}`);
-      await bot.sendMessage(channel.chat_id, '⚠️ Error al buscar enlaces para limpiar.', { 
-        message_thread_id: channel.thread_id || undefined, 
-        parse_mode: 'HTML' 
-      });
-      return;
-    }
-
-    if (!linksToDelete || linksToDelete.length === 0) {
-      console.log('✅ No hay enlaces para limpiar (ni fuera de los canales ni expirados)');
-      await bot.sendMessage(channel.chat_id, '✅ No hay enlaces para limpiar (ni fuera de los canales ni expirados).', { 
-        message_thread_id: channel.thread_id || undefined, 
-        parse_mode: 'HTML' 
-      });
-      return;
-    }
-
-    const idsToDelete = linksToDelete.map(link => link.id);
-    const expiredCount = linksToDelete.filter(link => new Date(link.expires_at) < new Date(now)).length;
-    const outsideChannelCount = linksToDelete.filter(link => !['-1002348662107', '-1002616995435'].includes(link.chat_id)).length;
-
-    console.log(`🧹 Enlaces a eliminar encontrados: ${idsToDelete.length} (Expirados: ${expiredCount}, Fuera de canales: ${outsideChannelCount})`);
-
-    const { error: deleteError } = await supabaseService
-      .from('short_links')
-      .delete()
-      .in('id', idsToDelete);
-
-    if (deleteError) {
-      console.error(`❌ Error al eliminar enlaces: ${deleteError.message}`);
-      await bot.sendMessage(channel.chat_id, '⚠️ Error al limpiar enlaces.', { 
-        message_thread_id: channel.thread_id || undefined, 
-        parse_mode: 'HTML' 
-      });
-      return;
-    }
-
-    console.log(`✅ ${idsToDelete.length} enlaces eliminados de la base de datos`);
-    await bot.sendMessage(channel.chat_id, `🧹 Se han eliminado ${idsToDelete.length} enlaces (${expiredCount} expirados, ${outsideChannelCount} fuera de canales).${SIGNATURE}`, { 
-      message_thread_id: channel.thread_id || undefined, 
-      parse_mode: 'HTML' 
-    });
-  } catch (error) {
-    console.error(`❌ Error inesperado en /clean: ${error.message}`);
-    await bot.sendMessage(channel.chat_id, '⚠️ Ocurrió un error inesperado al limpiar los enlaces.', { 
-      message_thread_id: channel.thread_id || undefined, 
-      parse_mode: 'HTML' 
-    });
-  }
-});
-
-// **Comando /union (solo para administradores)**
-bot.onText(/\/union/, async (msg) => {
-  const chatId = msg.chat.id.toString();
-  const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
-
-  console.log(`📝 Procesando /union - Chat ID: ${chatId}, Thread ID: ${threadId}`);
-
-  if (!GRUPOS_PREDEFINIDOS[chatId]) {
-    console.log(`⚠️ Chat ${chatId} no está en GRUPOS_PREDEFINIDOS`);
-    return;
-  }
-  if (threadId && threadId !== CANALES_ESPECIFICOS[chatId]?.thread_id) {
-    console.log(`⚠️ Thread ${threadId} no coincide con ${CANALES_ESPECIFICOS[chatId]?.thread_id}`);
-    return;
-  }
-
-  const userId = msg.from.id;
-  const channel = CANALES_ESPECIFICOS[chatId];
-
-  const isUserAdmin = await isAdmin(chatId, userId);
-  if (!isUserAdmin) {
-    console.log(`🚫 ${userId} no es administrador en ${chatId}`);
-    await bot.sendMessage(channel.chat_id, '🚫 Solo los administradores pueden usar este comando.', { 
-      message_thread_id: channel.thread_id || undefined, 
-      parse_mode: 'HTML' 
-    });
-    return;
-  }
-
-  await unifyClicks(chatId);
-});
-
-// **Ruta para manejar el webhook de Telegram**
-app.post('/webhook', (req, res) => {
-  bot.processUpdate(req.body);
-  res.sendStatus(200);
 });
 
 // **Ruta para manejar la redirección de enlaces acortados**
 app.get('/redirect/:shortId', async (req, res) => {
   const { shortId } = req.params;
-  const { token } = req.query;
+  const username = req.query.username || 'unknown'; // En un entorno real, necesitarías autenticación
 
   try {
     const { data: linkData, error } = await supabaseAnon
@@ -810,7 +408,7 @@ app.get('/redirect/:shortId', async (req, res) => {
       .single();
 
     if (error || !linkData) {
-      console.error(`❌ Error al obtener el enlace desde Supabase: ${error?.message || 'Enlace no encontrado'}`);
+      console.error(`❌ Enlace no encontrado: ${shortId}`);
       return res.status(404).send('Enlace no encontrado o expirado.');
     }
 
@@ -821,12 +419,22 @@ app.get('/redirect/:shortId', async (req, res) => {
       return res.status(410).send('El enlace ha expirado.');
     }
 
+    // Registrar el clic
+    await registerClick(shortId, username, linkData.original_url);
+
+    // Redirigir a la URL original
     console.log(`✅ Redirigiendo a: ${linkData.original_url}`);
     res.redirect(linkData.original_url);
   } catch (error) {
-    console.error(`❌ Error al procesar la redirección: ${error.message}`);
+    console.error(`❌ Error al procesar redirección: ${error.message}`);
     res.status(500).send('Error interno del servidor.');
   }
+});
+
+// **Ruta para manejar el webhook de Telegram**
+app.post('/webhook', (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
 });
 
 // **Configurar webhook, limpieza automática y arrancar**
@@ -834,13 +442,12 @@ app.listen(PORT, async () => {
   console.log(`✅ Servidor en puerto ${PORT}`);
   await bot.setWebHook(WEBHOOK_URL);
 
+  // Ejecutar migración de la base de datos
+  await migrateDatabase();
+
   // Ejecutar limpieza automática al iniciar
-  await unifyClicks();
   await autoCleanExpiredLinks();
 
   // Configurar intervalos para limpieza automática
-  setInterval(async () => {
-    await unifyClicks();
-    await autoCleanExpiredLinks();
-  }, AUTO_CLEAN_INTERVAL);
+  setInterval(autoCleanExpiredLinks, AUTO_CLEAN_INTERVAL);
 });
