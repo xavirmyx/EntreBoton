@@ -1,7 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
-const { customAlphabet } = require('nanoid/async'); // Usamos nanoid/async para compatibilidad con CommonJS
+const { customAlphabet } = require('nanoid/non-secure'); // Usamos nanoid/non-secure (síncrono) de la versión 4
 const { createCanvas } = require('canvas');
 const rateLimit = require('express-rate-limit');
 
@@ -62,7 +62,7 @@ const redirectLimiter = rateLimit({
   message: 'Demasiados clics en poco tiempo. Por favor, intenta de nuevo más tarde.'
 });
 
-// Generador de shortId con alfabeto personalizado (asíncrono)
+// Generador de shortId con alfabeto personalizado (síncrono)
 const generateShortId = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789', 10);
 
 // **Generar una imagen con el enlace**
@@ -166,7 +166,7 @@ function extractUrls(text) {
 
 // **Acortar URL y almacenar en Supabase**
 async function shortenUrl(originalUrl, messageId, chatId, userId, username, expiryHours = 24) {
-  const shortId = await generateShortId(); // Ahora es asíncrono
+  const shortId = generateShortId(); // Ahora es síncrono
   const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString();
 
   const { error } = await supabaseService.from('short_links').insert({
