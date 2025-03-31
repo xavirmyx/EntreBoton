@@ -1,9 +1,9 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
-const { customAlphabet } = require('nanoid/non-secure');
-const { createCanvas } = require('canvas'); // Para generar imágenes
-const rateLimit = require('express-rate-limit'); // Para rate limiting
+const { customAlphabet } = require('nanoid/async'); // Usamos nanoid/async para compatibilidad con CommonJS
+const { createCanvas } = require('canvas');
+const rateLimit = require('express-rate-limit');
 
 // Configuración de logging
 console.log('🚀 Iniciando el bot EntresHijos...');
@@ -58,11 +58,11 @@ app.use(express.json());
 const redirectLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutos
   max: 100, // Máximo 100 clics por usuario en 15 minutos
-  keyGenerator: (req) => req.query.username || 'unknown', // Usamos el username como clave
+  keyGenerator: (req) => req.query.username || 'unknown',
   message: 'Demasiados clics en poco tiempo. Por favor, intenta de nuevo más tarde.'
 });
 
-// Generador de shortId con alfabeto personalizado (más opaco)
+// Generador de shortId con alfabeto personalizado (asíncrono)
 const generateShortId = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789', 10);
 
 // **Generar una imagen con el enlace**
@@ -88,7 +88,6 @@ function generateLinkImage(linkText) {
   ctx.fillStyle = '#ffd700';
   ctx.fillText('✨ EntresHijos ✨', width / 2, height / 2 + 20);
 
-  // Convertir a buffer
   return canvas.toBuffer('image/png');
 }
 
@@ -97,13 +96,16 @@ async function migrateDatabase() {
   try {
     console.log('📦 Iniciando migración de la base de datos...');
 
-    // Crear tabla short_links
+    // Eliminar la columna token si existe
     await supabaseService.rpc('execute_sql', {
       query: `
-        -- Eliminar la columna token si existe
         ALTER TABLE IF EXISTS short_links DROP COLUMN IF EXISTS token;
+      `
+    });
 
-        -- Crear o actualizar la tabla short_links
+    // Crear tabla short_links sin la columna token
+    await supabaseService.rpc('execute_sql', {
+      query: `
         CREATE TABLE IF NOT EXISTS short_links (
           id TEXT PRIMARY KEY,
           original_url TEXT NOT NULL,
@@ -164,7 +166,7 @@ function extractUrls(text) {
 
 // **Acortar URL y almacenar en Supabase**
 async function shortenUrl(originalUrl, messageId, chatId, userId, username, expiryHours = 24) {
-  const shortId = generateShortId();
+  const shortId = await generateShortId(); // Ahora es asíncrono
   const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString();
 
   const { error } = await supabaseService.from('short_links').insert({
@@ -198,10 +200,8 @@ async function disguiseUrls(text, messageId, chatId, userId, username) {
     const shortId = await shortenUrl(url, messageId, chatId, userId, username);
     if (shortId) {
       const redirectUrl = `${REDIRECT_BASE_URL}${shortId}`;
-      // Reemplazar la URL en el texto por un placeholder
       modifiedText = modifiedText.replace(url, '[ENLACE PROTEGIDO]');
       shortLinks.push({ shortId, originalUrl: url });
-      // Generar una imagen con el enlace
       const imageBuffer = generateLinkImage(redirectUrl);
       linkImages.push(imageBuffer);
     }

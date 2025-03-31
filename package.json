@@ -7,12 +7,12 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "express": "^4.17.1",
-    "node-telegram-bot-api": "^0.61.0",
-    "@supabase/supabase-js": "^2.0.0",
-    "nanoid": "^5.0.0",
+    "express": "^4.19.2",
+    "node-telegram-bot-api": "^0.66.0",
+    "@supabase/supabase-js": "^2.45.4",
+    "nanoid": "^5.0.7",
     "canvas": "^2.11.2",
-    "express-rate-limit": "^7.1.5"
+    "express-rate-limit": "^7.4.0"
   },
   "author": "xavirmyx",
   "license": "ISC"
