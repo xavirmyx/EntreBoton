@@ -1,7 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
-const { customAlphabet } = require('nanoid');
+const { customAlphabet } = require('nanoid/non-secure'); // Usamos la versión compatible con CommonJS
 
 // Configuración de logging
 console.log('🚀 Iniciando el bot EntresHijos...');
@@ -26,7 +26,7 @@ const REDIRECT_BASE_URL = 'https://ehjs.link/redirect/'; // Dominio ficticio par
 // Configuración de Supabase
 const SUPABASE_URL = 'https://ycvkdxzxrzuwnkybmjwf.supabase.co';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4crp1d25reWJtandmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDI4Mjg4NzYsImV4cCI6MjA1ODQwNDg3Nn0.1ts8XIpysbMe5heIg3oWLfqKxReusZxemw4lk2WZ4GI';
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4crp1d25reWJtandmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjgyODg3NiwiZXhwIjoyMDU4NDA0ODc2fQ.q1234567890abcdefghij';
+const SUPABASE_SERVICE_KEY = process  process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4crp1d25reWJtandmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjgyODg3NiwiZXhwIjoyMDU4NDA0ODc2fQ.q1234567890abcdefghij';
 
 // Cliente de Supabase
 const supabaseAnon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -60,9 +60,13 @@ async function migrateDatabase() {
   try {
     console.log('📦 Iniciando migración de la base de datos...');
 
-    // Crear tabla short_links
+    // Crear tabla short_links (eliminamos la columna token)
     await supabaseService.rpc('execute_sql', {
       query: `
+        -- Eliminar la columna token si existe
+        ALTER TABLE IF EXISTS short_links DROP COLUMN IF EXISTS token;
+
+        -- Crear o actualizar la tabla short_links sin la columna token
         CREATE TABLE IF NOT EXISTS short_links (
           id TEXT PRIMARY KEY,
           original_url TEXT NOT NULL,
