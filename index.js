@@ -1,7 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
-const { customAlphabet } = require('nanoid'); // Usaremos customAlphabet para un shortId más opaco
+const { customAlphabet } = require('nanoid');
 
 // Configuración de logging
 console.log('🚀 Iniciando el bot EntresHijos...');

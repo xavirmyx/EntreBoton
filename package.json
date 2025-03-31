@@ -1,8 +1,17 @@
 {
+  "name": "entreboton",
+  "version": "1.0.0",
+  "description": "Bot de Telegram para EntresHijos",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
   "dependencies": {
-    "@supabase/supabase-js": "^2.49.4",
-    "express": "^4.21.2",
-    "nanoid": "^5.1.5",
-    "node-telegram-bot-api": "^0.61.0"
-  }
+    "express": "^4.17.1",
+    "node-telegram-bot-api": "^0.61.0",
+    "@supabase/supabase-js": "^2.0.0",
+    "nanoid": "^5.0.0"
+  },
+  "author": "xavirmyx",
+  "license": "ISC"
 }
