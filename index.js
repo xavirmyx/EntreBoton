@@ -2,6 +2,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const { nanoid } = require('nanoid');
+const punycode = require('punycode/'); // Reemplazo de punycode nativo
 
 // Configuración de logging
 console.log('🚀 Iniciando el bot EntresHijos...');
@@ -221,17 +222,26 @@ async function isAdmin(chatId, userId) {
 // **Unificar clics en la tabla clicks**
 async function unifyClicks(chatId = null) {
   try {
-    // Obtener todos los clics
+    // Obtener todos los clics existentes
     const { data: clicks, error: selectError } = await supabaseService
       .from('clicks')
       .select('username, short_code');
 
     if (selectError) throw new Error(`Error al obtener clics: ${selectError.message}`);
+
+    // Eliminar todos los registros existentes para reiniciar
+    const { error: deleteError } = await supabaseService
+      .from('clicks')
+      .delete()
+      .neq('username', ''); // Filtro para evitar errores si la tabla está vacía
+
+    if (deleteError) throw new Error(`Error al eliminar clics: ${deleteError.message}`);
+
     if (!clicks || clicks.length === 0) {
-      console.log('✅ No hay clics para unificar.');
+      console.log('✅ No hay clics para unificar. Tabla reiniciada a 0.');
       if (chatId) {
         const channel = CANALES_ESPECIFICOS[chatId];
-        await bot.sendMessage(channel.chat_id, '✅ No hay clics para unificar.', { 
+        await bot.sendMessage(channel.chat_id, '✅ No hay clics para unificar. Los conteos han sido reiniciados a 0.', { 
           message_thread_id: channel.thread_id || undefined, 
           parse_mode: 'HTML' 
         });
@@ -244,14 +254,6 @@ async function unifyClicks(chatId = null) {
       acc[click.username] = (acc[click.username] || 0) + 1;
       return acc;
     }, {});
-
-    // Eliminar todos los registros existentes
-    const { error: deleteError } = await supabaseService
-      .from('clicks')
-      .delete()
-      .neq('username', ''); // Evitar errores con filtros vacíos
-
-    if (deleteError) throw new Error(`Error al eliminar clics: ${deleteError.message}`);
 
     // Insertar registros unificados
     const unifiedClicks = Object.entries(clickCountByUser).map(([username, total_clicks]) => ({
@@ -266,10 +268,10 @@ async function unifyClicks(chatId = null) {
 
     if (insertError) throw new Error(`Error al insertar clics unificados: ${insertError.message}`);
 
-    console.log(`✅ Clics unificados: ${unifiedClicks.length} usuarios procesados.`);
+    console.log(`✅ Clics unificados: ${unifiedClicks.length} usuarios procesados. Total de clics reiniciados.`);
     if (chatId) {
       const channel = CANALES_ESPECIFICOS[chatId];
-      await bot.sendMessage(channel.chat_id, `🧹 Se han unificado ${unifiedClicks.length} usuarios con sus clics totales.${SIGNATURE}`, { 
+      await bot.sendMessage(channel.chat_id, `🧹 Se han unificado ${unifiedClicks.length} usuarios con sus clics totales. Conteos reiniciados.${SIGNATURE}`, { 
         message_thread_id: channel.thread_id || undefined, 
         parse_mode: 'HTML' 
       });
@@ -352,6 +354,35 @@ Soy un bot diseñado para proteger el contenido exclusivo de este grupo. Aquí t
 ¡Envía un enlace, foto, video o GIF para empezar! 🚀
   `;
   await bot.sendMessage(channel.chat_id, welcomeMessage, { 
+    message_thread_id: channel.thread_id || undefined, 
+    parse_mode: 'HTML' 
+  });
+});
+
+// **Comando /menu**
+bot.onText(/\/menu/, async (msg) => {
+  const chatId = msg.chat.id.toString();
+  const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
+
+  if (!GRUPOS_PREDEFINIDOS[chatId]) return;
+  if (threadId && threadId !== CANALES_ESPECIFICOS[chatId]?.thread_id) return;
+
+  const channel = CANALES_ESPECIFICOS[chatId];
+  const menuMessage = `
+<b>📋 Menú de Comandos - EntresHijos ✨</b>
+
+Aquí tienes la lista de comandos disponibles:
+
+📌 <b>/start</b> - Inicia el bot y muestra un mensaje de bienvenida.
+🧹 <b>/clean</b> - (Solo admins) Elimina enlaces fuera de los grupos o expirados de la base de datos.
+📊 <b>/union</b> - (Solo admins) Unifica los clics por usuario en la base de datos, reiniciando los conteos.
+📋 <b>/menu</b> - Muestra este menú con todos los comandos disponibles.
+
+¡Usa estos comandos para gestionar el contenido del grupo! 🚀
+${SIGNATURE}
+  `;
+
+  await bot.sendMessage(channel.chat_id, menuMessage, { 
     message_thread_id: channel.thread_id || undefined, 
     parse_mode: 'HTML' 
   });
@@ -522,6 +553,8 @@ bot.on('callback_query', async (query) => {
   const callbackQueryId = query.id;
   const callbackData = query.data;
   const username = query.from.username ? `@${query.from.username}` : query.from.first_name;
+  const chatId = query.message.chat.id.toString();
+  const messageId = query.message.message_id;
 
   try {
     const dataParts = callbackData.split(':');
@@ -568,9 +601,14 @@ bot.on('callback_query', async (query) => {
     const redirectToken = require('crypto').randomBytes(16).toString('hex');
     const redirectUrl = `${REDIRECT_BASE_URL}${shortId}?token=${redirectToken}`;
 
+    // Enviar mensaje con la URL en lugar de usar answerCallbackQuery con url
+    await bot.sendMessage(chatId, `✅ Enlace listo: ${redirectUrl}`, {
+      reply_to_message_id: messageId,
+      parse_mode: 'HTML'
+    });
+
     await bot.answerCallbackQuery(callbackQueryId, {
-      text: '✅ Enlace listo. ¡Haz clic abajo para acceder!',
-      url: redirectUrl,
+      text: '✅ Clic registrado. Revisa el enlace enviado.',
       show_alert: false
     });
 
