@@ -1,7 +1,9 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
-const { customAlphabet } = require('nanoid/non-secure'); // Usamos la versión compatible con CommonJS
+const { customAlphabet } = require('nanoid/non-secure');
+const { createCanvas } = require('canvas'); // Para generar imágenes
+const rateLimit = require('express-rate-limit'); // Para rate limiting
 
 // Configuración de logging
 console.log('🚀 Iniciando el bot EntresHijos...');
@@ -26,7 +28,7 @@ const REDIRECT_BASE_URL = 'https://ehjs.link/redirect/'; // Dominio ficticio par
 // Configuración de Supabase
 const SUPABASE_URL = 'https://ycvkdxzxrzuwnkybmjwf.supabase.co';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4crp1d25reWJtandmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDI4Mjg4NzYsImV4cCI6MjA1ODQwNDg3Nn0.1ts8XIpysbMe5heIg3oWLfqKxReusZxemw4lk2WZ4GI';
-const SUPABASE_SERVICE_KEY = process  process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4crp1d25reWJtandmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjgyODg3NiwiZXhwIjoyMDU4NDA0ODc2fQ.q1234567890abcdefghij';
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljdmtkeHp4crp1d25reWJtandmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjgyODg3NiwiZXhwIjoyMDU4NDA0ODc2fQ.q1234567890abcdefghij';
 
 // Cliente de Supabase
 const supabaseAnon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -52,21 +54,56 @@ const bot = new TelegramBot(TOKEN, { polling: false });
 const app = express();
 app.use(express.json());
 
+// Rate limiting para la ruta de redirección
+const redirectLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: 100, // Máximo 100 clics por usuario en 15 minutos
+  keyGenerator: (req) => req.query.username || 'unknown', // Usamos el username como clave
+  message: 'Demasiados clics en poco tiempo. Por favor, intenta de nuevo más tarde.'
+});
+
 // Generador de shortId con alfabeto personalizado (más opaco)
 const generateShortId = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789', 10);
+
+// **Generar una imagen con el enlace**
+function generateLinkImage(linkText) {
+  const width = 600;
+  const height = 100;
+  const canvas = createCanvas(width, height);
+  const ctx = canvas.getContext('2d');
+
+  // Fondo oscuro
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(0, 0, width, height);
+
+  // Texto del enlace
+  ctx.font = '20px Arial';
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(linkText, width / 2, height / 2 - 10);
+
+  // Marca EntresHijos
+  ctx.font = '14px Arial';
+  ctx.fillStyle = '#ffd700';
+  ctx.fillText('✨ EntresHijos ✨', width / 2, height / 2 + 20);
+
+  // Convertir a buffer
+  return canvas.toBuffer('image/png');
+}
 
 // **Migración de la base de datos**
 async function migrateDatabase() {
   try {
     console.log('📦 Iniciando migración de la base de datos...');
 
-    // Crear tabla short_links (eliminamos la columna token)
+    // Crear tabla short_links
     await supabaseService.rpc('execute_sql', {
       query: `
         -- Eliminar la columna token si existe
         ALTER TABLE IF EXISTS short_links DROP COLUMN IF EXISTS token;
 
-        -- Crear o actualizar la tabla short_links sin la columna token
+        -- Crear o actualizar la tabla short_links
         CREATE TABLE IF NOT EXISTS short_links (
           id TEXT PRIMARY KEY,
           original_url TEXT NOT NULL,
@@ -127,7 +164,7 @@ function extractUrls(text) {
 
 // **Acortar URL y almacenar en Supabase**
 async function shortenUrl(originalUrl, messageId, chatId, userId, username, expiryHours = 24) {
-  const shortId = generateShortId(); // Usamos el generador personalizado
+  const shortId = generateShortId();
   const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString();
 
   const { error } = await supabaseService.from('short_links').insert({
@@ -148,30 +185,34 @@ async function shortenUrl(originalUrl, messageId, chatId, userId, username, expi
   return shortId;
 }
 
-// **Reemplazar URLs en el texto por enlaces disfrazados**
+// **Reemplazar URLs en el texto y generar imágenes**
 async function disguiseUrls(text, messageId, chatId, userId, username) {
   const urls = extractUrls(text);
-  if (!urls.length) return { modifiedText: text, shortLinks: [] };
+  if (!urls.length) return { modifiedText: text, shortLinks: [], linkImages: [] };
 
   const shortLinks = [];
+  const linkImages = [];
   let modifiedText = text;
 
   for (const url of urls) {
     const shortId = await shortenUrl(url, messageId, chatId, userId, username);
     if (shortId) {
       const redirectUrl = `${REDIRECT_BASE_URL}${shortId}`;
-      modifiedText = modifiedText.replace(url, redirectUrl);
+      // Reemplazar la URL en el texto por un placeholder
+      modifiedText = modifiedText.replace(url, '[ENLACE PROTEGIDO]');
       shortLinks.push({ shortId, originalUrl: url });
+      // Generar una imagen con el enlace
+      const imageBuffer = generateLinkImage(redirectUrl);
+      linkImages.push(imageBuffer);
     }
   }
 
-  return { modifiedText, shortLinks };
+  return { modifiedText, shortLinks, linkImages };
 }
 
 // **Registrar un clic en la tabla clicks**
 async function registerClick(shortId, username, originalUrl) {
   try {
-    // Buscar si ya existe un registro para este usuario y enlace
     const { data: existingClick, error: selectError } = await supabaseService
       .from('clicks')
       .select('id, click_count')
@@ -184,7 +225,6 @@ async function registerClick(shortId, username, originalUrl) {
     }
 
     if (existingClick) {
-      // Actualizar el contador y la fecha
       const { error: updateError } = await supabaseService
         .from('clicks')
         .update({
@@ -196,7 +236,6 @@ async function registerClick(shortId, username, originalUrl) {
       if (updateError) throw new Error(`Error al actualizar clic: ${updateError.message}`);
       console.log(`✅ Clic actualizado para ${username} en ${shortId}: ${existingClick.click_count + 1} clics`);
     } else {
-      // Insertar un nuevo registro
       const { error: insertError } = await supabaseService
         .from('clicks')
         .insert({
@@ -232,7 +271,6 @@ async function autoCleanExpiredLinks() {
       return;
     }
 
-    // Eliminar mensajes del grupo
     for (const link of expiredLinks) {
       const channel = CANALES_ESPECIFICOS[link.chat_id];
       if (channel) {
@@ -245,7 +283,6 @@ async function autoCleanExpiredLinks() {
       }
     }
 
-    // Eliminar de la base de datos
     const idsToDelete = expiredLinks.map(link => link.id);
     const { error: deleteError } = await supabaseService
       .from('short_links')
@@ -289,11 +326,13 @@ bot.on('message', async (msg) => {
   try {
     let finalText = text || '';
     let shortLinks = [];
+    let linkImages = [];
 
     if (text) {
-      const { modifiedText, shortLinks: generatedLinks } = await disguiseUrls(text, loadingMsg.message_id, chatId, userId, username);
+      const { modifiedText, shortLinks: generatedLinks, linkImages: generatedImages } = await disguiseUrls(text, loadingMsg.message_id, chatId, userId, username);
       finalText = modifiedText;
       shortLinks = generatedLinks;
+      linkImages = generatedImages;
     }
 
     finalText = finalText ? `${finalText}${SIGNATURE}${WARNING_MESSAGE}` : `📅 Evento${SIGNATURE}${WARNING_MESSAGE}`;
@@ -331,9 +370,17 @@ bot.on('message', async (msg) => {
       });
     }
 
+    // Enviar las imágenes de los enlaces
+    for (const imageBuffer of linkImages) {
+      await bot.sendPhoto(channel.chat_id, imageBuffer, {
+        caption: '🔗 Enlace protegido - Haz clic en la imagen para acceder',
+        message_thread_id: channel.thread_id || undefined,
+        protect_content: true
+      });
+    }
+
     messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: finalText });
 
-    // Eliminar el mensaje original
     await bot.deleteMessage(chatId, originalMessageId);
     console.log(`✅ Mensaje original (ID: ${originalMessageId}) eliminado.`);
   } catch (error) {
@@ -400,9 +447,9 @@ bot.on('message', async (msg) => {
 });
 
 // **Ruta para manejar la redirección de enlaces acortados**
-app.get('/redirect/:shortId', async (req, res) => {
+app.get('/redirect/:shortId', redirectLimiter, async (req, res) => {
   const { shortId } = req.params;
-  const username = req.query.username || 'unknown'; // En un entorno real, necesitarías autenticación
+  const username = req.query.username || 'unknown';
 
   try {
     const { data: linkData, error } = await supabaseAnon
@@ -423,10 +470,8 @@ app.get('/redirect/:shortId', async (req, res) => {
       return res.status(410).send('El enlace ha expirado.');
     }
 
-    // Registrar el clic
     await registerClick(shortId, username, linkData.original_url);
 
-    // Redirigir a la URL original
     console.log(`✅ Redirigiendo a: ${linkData.original_url}`);
     res.redirect(linkData.original_url);
   } catch (error) {
@@ -446,12 +491,7 @@ app.listen(PORT, async () => {
   console.log(`✅ Servidor en puerto ${PORT}`);
   await bot.setWebHook(WEBHOOK_URL);
 
-  // Ejecutar migración de la base de datos
   await migrateDatabase();
-
-  // Ejecutar limpieza automática al iniciar
   await autoCleanExpiredLinks();
-
-  // Configurar intervalos para limpieza automática
   setInterval(autoCleanExpiredLinks, AUTO_CLEAN_INTERVAL);
 });
