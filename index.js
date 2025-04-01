@@ -1,7 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
-const { customAlphabet } = require('nanoid/non-secure');
+const { customAlphabet } = require('nanoid/async'); // Cambiamos a nanoid/async
 const rateLimit = require('express-rate-limit');
 
 // Configuración de logging
@@ -24,8 +24,8 @@ const MESSAGE_ORIGINS_CLEAN_INTERVAL = 60 * 60 * 1000; // 1 hora
 
 // Configuración del servidor webhook
 const PORT = process.env.PORT || 3000; // Usamos el puerto dinámico de Render
-const WEBHOOK_URL = 'https://0.entreshijosprotec.ct.ws/webhook'; // Usamos el subdominio correcto
-const REDIRECT_BASE_URL = 'https://0.entreshijosprotec.ct.ws/redirect/'; // Subdominio correcto para los enlaces disfrazados
+const WEBHOOK_URL = 'https://0.entreshijosprotec.ct.ws/webhook'; // Subdominio correcto
+const REDIRECT_BASE_URL = 'https://0.entreshijosprotec.ct.ws/redirect/'; // Subdominio correcto
 
 // Configuración de Supabase
 const SUPABASE_URL = 'https://ycvkdxzxrzuwnkybmjwf.supabase.co';
@@ -69,7 +69,7 @@ const redirectLimiter = rateLimit({
   message: 'Demasiados clics en poco tiempo. Por favor, intenta de nuevo más tarde.'
 });
 
-// Generador de shortId con alfabeto personalizado (síncrono)
+// Generador de shortId con alfabeto personalizado (asíncrono)
 const generateShortId = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789', 10);
 
 // **Migración de la base de datos**
@@ -147,14 +147,17 @@ function extractUrls(text) {
 
 // **Acortar múltiples URLs y almacenar en Supabase**
 async function shortenUrl(originalUrls, messageId, chatId, userId, username, expiryHours = 24) {
-  const shortLinks = originalUrls.map(url => ({
-    id: generateShortId(),
-    original_url: url,
-    message_id: messageId,
-    chat_id: chatId,
-    user_id: userId,
-    username: username,
-    expires_at: new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString()
+  const shortLinks = await Promise.all(originalUrls.map(async (url) => {
+    const id = await generateShortId(); // Ahora es asíncrono
+    return {
+      id,
+      original_url: url,
+      message_id: messageId,
+      chat_id: chatId,
+      user_id: userId,
+      username: username,
+      expires_at: new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString()
+    };
   }));
 
   const { error } = await supabaseService.from('short_links').insert(shortLinks);

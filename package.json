@@ -12,7 +12,8 @@
     "@supabase/supabase-js": "^2.45.4",
     "nanoid": "^4.0.2",
     "canvas": "^2.11.2",
-    "express-rate-limit": "^7.4.0"
+    "express-rate-limit": "^7.4.0",
+    "punycode.js": "^2.3.1"
   },
   "author": "xavirmyx",
   "license": "ISC"
