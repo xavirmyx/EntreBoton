@@ -24,8 +24,8 @@ const MESSAGE_ORIGINS_CLEAN_INTERVAL = 60 * 60 * 1000; // 1 hora
 
 // Configuración del servidor webhook
 const PORT = process.env.PORT || 3000; // Usamos el puerto dinámico de Render
-const WEBHOOK_URL = 'https://0.entreshijosprotec.ct.ws/webhook'; // Subdominio correcto
-const REDIRECT_BASE_URL = 'https://0.entreshijosprotec.ct.ws/redirect/'; // Subdominio correcto
+const WEBHOOK_URL = 'https://entreboton.onrender.com/webhook'; // Cambiamos a Render
+const REDIRECT_BASE_URL = 'https://entreboton.onrender.com/redirect/'; // Cambiamos a Render
 
 // Configuración de Supabase
 const SUPABASE_URL = 'https://ycvkdxzxrzuwnkybmjwf.supabase.co';
