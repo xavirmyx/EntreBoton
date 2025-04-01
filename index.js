@@ -2,7 +2,6 @@ const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const { customAlphabet } = require('nanoid/non-secure'); // Usamos nanoid/non-secure (síncrono) de la versión 4
-const { createCanvas } = require('canvas');
 const rateLimit = require('express-rate-limit');
 
 // Configuración de logging
@@ -64,32 +63,6 @@ const redirectLimiter = rateLimit({
 
 // Generador de shortId con alfabeto personalizado (síncrono)
 const generateShortId = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789', 10);
-
-// **Generar una imagen con el enlace**
-function generateLinkImage(linkText) {
-  const width = 600;
-  const height = 100;
-  const canvas = createCanvas(width, height);
-  const ctx = canvas.getContext('2d');
-
-  // Fondo oscuro
-  ctx.fillStyle = '#1a1a1a';
-  ctx.fillRect(0, 0, width, height);
-
-  // Texto del enlace
-  ctx.font = '20px Arial';
-  ctx.fillStyle = '#ffffff';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(linkText, width / 2, height / 2 - 10);
-
-  // Marca EntresHijos
-  ctx.font = '14px Arial';
-  ctx.fillStyle = '#ffd700';
-  ctx.fillText('✨ EntresHijos ✨', width / 2, height / 2 + 20);
-
-  return canvas.toBuffer('image/png');
-}
 
 // **Migración de la base de datos**
 async function migrateDatabase() {
@@ -166,7 +139,7 @@ function extractUrls(text) {
 
 // **Acortar URL y almacenar en Supabase**
 async function shortenUrl(originalUrl, messageId, chatId, userId, username, expiryHours = 24) {
-  const shortId = generateShortId(); // Ahora es síncrono
+  const shortId = generateShortId(); // Síncrono
   const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString();
 
   const { error } = await supabaseService.from('short_links').insert({
@@ -187,27 +160,24 @@ async function shortenUrl(originalUrl, messageId, chatId, userId, username, expi
   return shortId;
 }
 
-// **Reemplazar URLs en el texto y generar imágenes**
+// **Reemplazar URLs en el texto con enlaces protegidos**
 async function disguiseUrls(text, messageId, chatId, userId, username) {
   const urls = extractUrls(text);
-  if (!urls.length) return { modifiedText: text, shortLinks: [], linkImages: [] };
+  if (!urls.length) return { modifiedText: text, shortLinks: [] };
 
   const shortLinks = [];
-  const linkImages = [];
   let modifiedText = text;
 
   for (const url of urls) {
     const shortId = await shortenUrl(url, messageId, chatId, userId, username);
     if (shortId) {
       const redirectUrl = `${REDIRECT_BASE_URL}${shortId}`;
-      modifiedText = modifiedText.replace(url, '[ENLACE PROTEGIDO]');
+      modifiedText = modifiedText.replace(url, redirectUrl);
       shortLinks.push({ shortId, originalUrl: url });
-      const imageBuffer = generateLinkImage(redirectUrl);
-      linkImages.push(imageBuffer);
     }
   }
 
-  return { modifiedText, shortLinks, linkImages };
+  return { modifiedText, shortLinks };
 }
 
 // **Registrar un clic en la tabla clicks**
@@ -326,13 +296,11 @@ bot.on('message', async (msg) => {
   try {
     let finalText = text || '';
     let shortLinks = [];
-    let linkImages = [];
 
     if (text) {
-      const { modifiedText, shortLinks: generatedLinks, linkImages: generatedImages } = await disguiseUrls(text, loadingMsg.message_id, chatId, userId, username);
+      const { modifiedText, shortLinks: generatedLinks } = await disguiseUrls(text, loadingMsg.message_id, chatId, userId, username);
       finalText = modifiedText;
       shortLinks = generatedLinks;
-      linkImages = generatedImages;
     }
 
     finalText = finalText ? `${finalText}${SIGNATURE}${WARNING_MESSAGE}` : `📅 Evento${SIGNATURE}${WARNING_MESSAGE}`;
@@ -366,15 +334,6 @@ bot.on('message', async (msg) => {
         message_thread_id: channel.thread_id || undefined,
         parse_mode: 'HTML',
         disable_web_page_preview: true,
-        protect_content: true
-      });
-    }
-
-    // Enviar las imágenes de los enlaces
-    for (const imageBuffer of linkImages) {
-      await bot.sendPhoto(channel.chat_id, imageBuffer, {
-        caption: '🔗 Enlace protegido - Haz clic en la imagen para acceder',
-        message_thread_id: channel.thread_id || undefined,
         protect_content: true
       });
     }
@@ -446,7 +405,7 @@ bot.on('message', async (msg) => {
   }
 });
 
-// **Ruta para manejar la redirección de enlaces acortados**
+// **Ruta para manejar la redirección de enlaces acortados con página intermedia**
 app.get('/redirect/:shortId', redirectLimiter, async (req, res) => {
   const { shortId } = req.params;
   const username = req.query.username || 'unknown';
@@ -470,12 +429,100 @@ app.get('/redirect/:shortId', redirectLimiter, async (req, res) => {
       return res.status(410).send('El enlace ha expirado.');
     }
 
+    // Mostrar página intermedia de confirmación
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="es">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Confirmación - EntresHijos</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            text-align: center;
+          }
+          .container {
+            background-color: #2a2a2a;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+          }
+          h1 {
+            font-size: 24px;
+            margin-bottom: 20px;
+          }
+          button {
+            background-color: #ffd700;
+            color: #1a1a1a;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+          }
+          button:hover {
+            background-color: #e6c200;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <h1>¿Seguro que quieres acceder al enlace de EntresHijos?</h1>
+          <form action="/confirm-redirect/${shortId}" method="POST">
+            <input type="hidden" name="username" value="${username}">
+            <button type="submit">Sí, continuar</button>
+          </form>
+        </div>
+      </body>
+      </html>
+    `);
+  } catch (error) {
+    console.error(`❌ Error al procesar redirección: ${error.message}`);
+    res.status(500).send('Error interno del servidor.');
+  }
+});
+
+// **Ruta para confirmar la redirección y registrar el clic**
+app.post('/confirm-redirect/:shortId', async (req, res) => {
+  const { shortId } = req.params;
+  const username = req.body.username || 'unknown';
+
+  try {
+    const { data: linkData, error } = await supabaseAnon
+      .from('short_links')
+      .select('original_url, expires_at')
+      .eq('id', shortId)
+      .single();
+
+    if (error || !linkData) {
+      console.error(`❌ Enlace no encontrado: ${shortId}`);
+      return res.status(404).send('Enlace no encontrado o expirado.');
+    }
+
+    const expiresAt = new Date(linkData.expires_at);
+    const now = new Date();
+    if (now > expiresAt) {
+      console.warn(`⚠️ Enlace expirado: ${shortId}`);
+      return res.status(410).send('El enlace ha expirado.');
+    }
+
+    // Registrar el clic
     await registerClick(shortId, username, linkData.original_url);
 
+    // Redirigir al enlace original
     console.log(`✅ Redirigiendo a: ${linkData.original_url}`);
     res.redirect(linkData.original_url);
   } catch (error) {
-    console.error(`❌ Error al procesar redirección: ${error.message}`);
+    console.error(`❌ Error al confirmar redirección: ${error.message}`);
     res.status(500).send('Error interno del servidor.');
   }
 });
