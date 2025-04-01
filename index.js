@@ -301,8 +301,14 @@ bot.on('message', async (msg) => {
   const chatId = msg.chat.id.toString();
   const threadId = msg.message_thread_id ? msg.message_thread_id.toString() : null;
 
-  if (!GRUPOS_PREDEFINIDOS[chatId]) return;
-  if (threadId && threadId !== CANALES_ESPECIFICOS[chatId]?.thread_id) return;
+  if (!GRUPOS_PREDEFINIDOS[chatId]) {
+    console.log(`⚠️ Chat no predefinido: ${chatId}`);
+    return;
+  }
+  if (threadId && threadId !== CANALES_ESPECIFICOS[chatId]?.thread_id) {
+    console.log(`⚠️ Thread no permitido: ${threadId} en chat ${chatId}`);
+    return;
+  }
 
   const userId = msg.from.id.toString();
   const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
@@ -314,8 +320,16 @@ bot.on('message', async (msg) => {
   const video = msg.video ? msg.video.file_id : null;
   const animation = msg.animation ? msg.animation.file_id : null;
 
-  if (msg.text && msg.text.startsWith('/')) return;
-  if (!text && !photo && !video && !animation) return;
+  if (msg.text && msg.text.startsWith('/')) {
+    console.log(`⚠️ Comando detectado: ${msg.text}`);
+    return;
+  }
+  if (!text && !photo && !video && !animation) {
+    console.log(`⚠️ Mensaje sin contenido procesable: ${originalMessageId}`);
+    return;
+  }
+
+  console.log(`📩 Procesando mensaje: ID=${originalMessageId}, chat=${chatId}, user=${username}`);
 
   const loadingMsg = await bot.sendMessage(channel.chat_id, '⏳ Generando publicación...', { 
     message_thread_id: channel.thread_id || undefined,
@@ -400,7 +414,10 @@ bot.on('message', async (msg) => {
   if (!msg.forward_from && !msg.forward_from_chat && !msg.forward_from_message_id) return;
 
   const chatId = msg.chat.id.toString();
-  if (!GRUPOS_PREDEFINIDOS[chatId]) return;
+  if (!GRUPOS_PREDEFINIDOS[chatId]) {
+    console.log(`⚠️ Chat no predefinido para reenvío: ${chatId}`);
+    return;
+  }
 
   const forwardedMessageId = msg.forward_from_message_id;
   console.log(`🔍 Detectado reenvío: message_id=${forwardedMessageId}, chat_id=${chatId}`);
@@ -457,6 +474,8 @@ bot.on('message', async (msg) => {
 app.get('/redirect/:shortId', redirectLimiter, async (req, res) => {
   const { shortId } = req.params;
   const username = req.query.username || 'unknown';
+
+  console.log(`🔗 Solicitud de redirección: shortId=${shortId}, username=${username}`);
 
   try {
     const { data: linkData, error } = await supabaseAnon
@@ -544,6 +563,8 @@ app.post('/confirm-redirect/:shortId', async (req, res) => {
   const { shortId } = req.params;
   const username = req.body.username || 'unknown';
 
+  console.log(`🔗 Confirmando redirección: shortId=${shortId}, username=${username}`);
+
   try {
     const { data: linkData, error } = await supabaseAnon
       .from('short_links')
@@ -577,6 +598,7 @@ app.post('/confirm-redirect/:shortId', async (req, res) => {
 
 // **Ruta para manejar el webhook de Telegram**
 app.post('/webhook', (req, res) => {
+  console.log('📥 Webhook recibido:', JSON.stringify(req.body));
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
@@ -584,7 +606,12 @@ app.post('/webhook', (req, res) => {
 // **Configurar webhook, limpieza automática y arrancar**
 app.listen(PORT, async () => {
   console.log(`✅ Servidor en puerto ${PORT}`);
-  await bot.setWebHook(WEBHOOK_URL);
+  try {
+    await bot.setWebHook(WEBHOOK_URL);
+    console.log(`✅ Webhook configurado: ${WEBHOOK_URL}`);
+  } catch (error) {
+    console.error(`❌ Error al configurar webhook: ${error.message}`);
+  }
 
   await migrateDatabase();
   await autoCleanExpiredLinks();
