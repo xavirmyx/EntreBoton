@@ -19,10 +19,13 @@ const WARNING_MESSAGE = '\n⚠️ Este mensaje es exclusivo para este grupo. No 
 // Intervalo para limpieza automática (en milisegundos, ej. cada 6 horas)
 const AUTO_CLEAN_INTERVAL = 6 * 60 * 60 * 1000; // 6 horas
 
+// Intervalo para limpieza de messageOrigins (cada hora)
+const MESSAGE_ORIGINS_CLEAN_INTERVAL = 60 * 60 * 1000; // 1 hora
+
 // Configuración del servidor webhook
-const PORT = process.env.PORT || 8443;
-const WEBHOOK_URL = 'https://entreboton.onrender.com/webhook';
-const REDIRECT_BASE_URL = 'https://ehjs.link/redirect/'; // Dominio ficticio para los enlaces disfrazados
+const PORT = process.env.PORT || 3000; // Usamos el puerto dinámico de Render
+const WEBHOOK_URL = 'https://entrehijosprotec.ct.ws/webhook'; // Usamos el dominio personalizado
+const REDIRECT_BASE_URL = 'https://entrehijosprotec.ct.ws/redirect/'; // Dominio personalizado para los enlaces disfrazados
 
 // Configuración de Supabase
 const SUPABASE_URL = 'https://ycvkdxzxrzuwnkybmjwf.supabase.co';
@@ -53,10 +56,15 @@ const bot = new TelegramBot(TOKEN, { polling: false });
 const app = express();
 app.use(express.json());
 
+// Ruta para UptimeRobot
+app.get('/ping', (req, res) => {
+  res.status(200).send('Bot is alive!');
+});
+
 // Rate limiting para la ruta de redirección
 const redirectLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutos
-  max: 100, // Máximo 100 clics por usuario en 15 minutos
+  max: 500, // Máximo 500 clics por usuario en 15 minutos
   keyGenerator: (req) => req.query.username || 'unknown',
   message: 'Demasiados clics en poco tiempo. Por favor, intenta de nuevo más tarde.'
 });
@@ -137,27 +145,26 @@ function extractUrls(text) {
   return Array.from(urls);
 }
 
-// **Acortar URL y almacenar en Supabase**
-async function shortenUrl(originalUrl, messageId, chatId, userId, username, expiryHours = 24) {
-  const shortId = generateShortId(); // Síncrono
-  const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString();
-
-  const { error } = await supabaseService.from('short_links').insert({
-    id: shortId,
-    original_url: originalUrl,
+// **Acortar múltiples URLs y almacenar en Supabase**
+async function shortenUrl(originalUrls, messageId, chatId, userId, username, expiryHours = 24) {
+  const shortLinks = originalUrls.map(url => ({
+    id: generateShortId(),
+    original_url: url,
     message_id: messageId,
     chat_id: chatId,
     user_id: userId,
     username: username,
-    expires_at: expiresAt
-  });
+    expires_at: new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString()
+  }));
+
+  const { error } = await supabaseService.from('short_links').insert(shortLinks);
 
   if (error) {
-    console.error(`❌ Error al guardar enlace acortado: ${error.message}`);
+    console.error(`❌ Error al guardar enlaces acortados: ${error.message}`);
     return null;
   }
-  console.log(`✅ Enlace acortado guardado: ${shortId}`);
-  return shortId;
+  console.log(`✅ Enlaces acortados guardados: ${shortLinks.map(link => link.id).join(', ')}`);
+  return shortLinks;
 }
 
 // **Reemplazar URLs en el texto con enlaces protegidos**
@@ -165,23 +172,26 @@ async function disguiseUrls(text, messageId, chatId, userId, username) {
   const urls = extractUrls(text);
   if (!urls.length) return { modifiedText: text, shortLinks: [] };
 
-  const shortLinks = [];
-  let modifiedText = text;
+  const shortLinks = await shortenUrl(urls, messageId, chatId, userId, username);
+  if (!shortLinks) return { modifiedText: text, shortLinks: [] };
 
-  for (const url of urls) {
-    const shortId = await shortenUrl(url, messageId, chatId, userId, username);
-    if (shortId) {
-      const redirectUrl = `${REDIRECT_BASE_URL}${shortId}`;
-      modifiedText = modifiedText.replace(url, redirectUrl);
-      shortLinks.push({ shortId, originalUrl: url });
-    }
+  let modifiedText = text;
+  const shortLinksData = [];
+
+  for (let i = 0; i < urls.length; i++) {
+    const url = urls[i];
+    const shortLink = shortLinks[i];
+    const redirectUrl = `${REDIRECT_BASE_URL}${shortLink.id}`;
+    modifiedText = modifiedText.replace(url, '🔗 [Enlace protegido]');
+    shortLinksData.push({ shortId: shortLink.id, originalUrl: url });
   }
 
-  return { modifiedText, shortLinks };
+  return { modifiedText, shortLinks: shortLinksData };
 }
 
 // **Registrar un clic en la tabla clicks**
 async function registerClick(shortId, username, originalUrl) {
+  console.log(`📊 Intentando registrar clic: shortId=${shortId}, username=${username}`);
   try {
     const { data: existingClick, error: selectError } = await supabaseService
       .from('clicks')
@@ -191,6 +201,7 @@ async function registerClick(shortId, username, originalUrl) {
       .single();
 
     if (selectError && selectError.code !== 'PGRST116') {
+      console.error(`❌ Error al buscar clic existente: ${selectError.message}`);
       throw new Error(`Error al buscar clic existente: ${selectError.message}`);
     }
 
@@ -203,7 +214,10 @@ async function registerClick(shortId, username, originalUrl) {
         })
         .eq('id', existingClick.id);
 
-      if (updateError) throw new Error(`Error al actualizar clic: ${updateError.message}`);
+      if (updateError) {
+        console.error(`❌ Error al actualizar clic: ${updateError.message}`);
+        throw new Error(`Error al actualizar clic: ${updateError.message}`);
+      }
       console.log(`✅ Clic actualizado para ${username} en ${shortId}: ${existingClick.click_count + 1} clics`);
     } else {
       const { error: insertError } = await supabaseService
@@ -217,7 +231,10 @@ async function registerClick(shortId, username, originalUrl) {
           created_at: new Date().toISOString()
         });
 
-      if (insertError) throw new Error(`Error al registrar clic: ${insertError.message}`);
+      if (insertError) {
+        console.error(`❌ Error al registrar clic: ${insertError.message}`);
+        throw new Error(`Error al registrar clic: ${insertError.message}`);
+      }
       console.log(`✅ Clic registrado para ${username} en ${shortId}`);
     }
   } catch (error) {
@@ -267,6 +284,18 @@ async function autoCleanExpiredLinks() {
   }
 }
 
+// **Limpiar messageOrigins periódicamente**
+function cleanMessageOrigins() {
+  const now = Date.now();
+  for (const [messageId, origin] of messageOrigins.entries()) {
+    // Elimina entradas más antiguas que 24 horas
+    if (now - new Date(origin.timestamp || now).getTime() > 24 * 60 * 60 * 1000) {
+      messageOrigins.delete(messageId);
+    }
+  }
+  console.log(`🧹 Limpieza de messageOrigins completada. Entradas restantes: ${messageOrigins.size}`);
+}
+
 // **Procesar mensajes**
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id.toString();
@@ -305,6 +334,14 @@ bot.on('message', async (msg) => {
 
     finalText = finalText ? `${finalText}${SIGNATURE}${WARNING_MESSAGE}` : `📅 Evento${SIGNATURE}${WARNING_MESSAGE}`;
 
+    // Crear botones inline para los enlaces
+    const replyMarkup = shortLinks.length > 0 ? {
+      inline_keyboard: shortLinks.map(link => [{
+        text: 'Acceder al enlace',
+        url: `${REDIRECT_BASE_URL}${link.shortId}?username=${encodeURIComponent(username)}`
+      }])
+    } : undefined;
+
     await bot.deleteMessage(channel.chat_id, loadingMsg.message_id);
 
     let sentMessage;
@@ -313,32 +350,37 @@ bot.on('message', async (msg) => {
         caption: finalText,
         message_thread_id: channel.thread_id || undefined,
         parse_mode: 'HTML',
-        protect_content: true
+        protect_content: true,
+        reply_markup: replyMarkup
       });
     } else if (video) {
       sentMessage = await bot.sendVideo(channel.chat_id, video, {
         caption: finalText,
         message_thread_id: channel.thread_id || undefined,
         parse_mode: 'HTML',
-        protect_content: true
+        protect_content: true,
+        reply_markup: replyMarkup
       });
     } else if (animation) {
       sentMessage = await bot.sendAnimation(channel.chat_id, animation, {
         caption: finalText,
         message_thread_id: channel.thread_id || undefined,
         parse_mode: 'HTML',
-        protect_content: true
+        protect_content: true,
+        reply_markup: replyMarkup
       });
     } else {
       sentMessage = await bot.sendMessage(channel.chat_id, finalText, {
         message_thread_id: channel.thread_id || undefined,
         parse_mode: 'HTML',
         disable_web_page_preview: true,
-        protect_content: true
+        protect_content: true,
+        reply_markup: replyMarkup
       });
     }
 
-    messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: finalText });
+    messageOrigins.set(sentMessage.message_id, { chat_id: chatId, message_text: finalText, timestamp: new Date().toISOString() });
+    console.log(`📍 Almacenado origen del mensaje: message_id=${sentMessage.message_id}, chat_id=${chatId}`);
 
     await bot.deleteMessage(chatId, originalMessageId);
     console.log(`✅ Mensaje original (ID: ${originalMessageId}) eliminado.`);
@@ -361,18 +403,24 @@ bot.on('message', async (msg) => {
   if (!GRUPOS_PREDEFINIDOS[chatId]) return;
 
   const forwardedMessageId = msg.forward_from_message_id;
+  console.log(`🔍 Detectado reenvío: message_id=${forwardedMessageId}, chat_id=${chatId}`);
+
   const forwardedByUser = msg.from;
   const username = forwardedByUser.username ? `@${forwardedByUser.username}` : forwardedByUser.first_name;
 
   const forwardedFrom = msg.forward_from || msg.forward_from_chat;
   const isBotMessage = forwardedFrom && forwardedFrom.id === bot.id;
 
-  if (!messageOrigins.has(forwardedMessageId) && !isBotMessage) return;
+  if (!messageOrigins.has(forwardedMessageId) && !isBotMessage) {
+    console.log(`⚠️ Mensaje reenviado no encontrado en messageOrigins: message_id=${forwardedMessageId}`);
+    return;
+  }
 
   const origin = messageOrigins.get(forwardedMessageId) || { chat_id: chatId };
   const originalChatId = origin.chat_id;
   const channel = CANALES_ESPECIFICOS[originalChatId];
 
+  console.log(`🚨 Reenvío detectado: ${username} reenvió un mensaje exclusivo a ${msg.chat.title || msg.chat.id}`);
   await bot.sendMessage(channel.chat_id, `🚨 ${username} reenvió un mensaje exclusivo a ${msg.chat.title || msg.chat.id}!`, { 
     message_thread_id: channel.thread_id || undefined, 
     parse_mode: 'HTML',
@@ -541,4 +589,5 @@ app.listen(PORT, async () => {
   await migrateDatabase();
   await autoCleanExpiredLinks();
   setInterval(autoCleanExpiredLinks, AUTO_CLEAN_INTERVAL);
+  setInterval(cleanMessageOrigins, MESSAGE_ORIGINS_CLEAN_INTERVAL);
 });
