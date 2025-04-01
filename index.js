@@ -1,14 +1,14 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
-const { customAlphabet } = require('nanoid/non-secure'); // Usamos nanoid/non-secure (síncrono) de la versión 4
+const { customAlphabet } = require('nanoid/non-secure');
 const rateLimit = require('express-rate-limit');
 
 // Configuración de logging
 console.log('🚀 Iniciando el bot EntresHijos...');
 
 // Token del bot
-const TOKEN = '7624808452:AAHffFqqhaXtun4XthusBfeeeVDcp6Qsrs4';
+const TOKEN = process.env.TELEGRAM_TOKEN || '7624808452:AAHffFqqhaXtun4XthusBfeeeVDcp6Qsrs4';
 
 // Firma con emojis (permanente en todos los mensajes)
 const SIGNATURE = '\n\n✨ EntresHijos ✨';
@@ -24,8 +24,8 @@ const MESSAGE_ORIGINS_CLEAN_INTERVAL = 60 * 60 * 1000; // 1 hora
 
 // Configuración del servidor webhook
 const PORT = process.env.PORT || 3000; // Usamos el puerto dinámico de Render
-const WEBHOOK_URL = 'https://entrehijosprotec.ct.ws/webhook'; // Usamos el dominio personalizado
-const REDIRECT_BASE_URL = 'https://entrehijosprotec.ct.ws/redirect/'; // Dominio personalizado para los enlaces disfrazados
+const WEBHOOK_URL = 'https://0.entreshijosprotec.ct.ws/webhook'; // Usamos el subdominio correcto
+const REDIRECT_BASE_URL = 'https://0.entreshijosprotec.ct.ws/redirect/'; // Subdominio correcto para los enlaces disfrazados
 
 // Configuración de Supabase
 const SUPABASE_URL = 'https://ycvkdxzxrzuwnkybmjwf.supabase.co';
